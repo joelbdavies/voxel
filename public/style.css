@@ -1,0 +1,58 @@
+html, body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  overflow: hidden;
+  background: #202428;
+  color: #eaeaea;
+  font-family: system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, Noto Sans, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji";
+}
+
+#glcanvas {
+  width: 100vw;
+  height: 100vh;
+  display: block;
+}
+
+#hud {
+  position: fixed;
+  left: 0; right: 0; top: 0; bottom: 0;
+  pointer-events: none;
+}
+
+#instructions {
+  position: absolute;
+  left: 12px; top: 12px;
+  background: rgba(0,0,0,0.4);
+  padding: 8px 10px;
+  border-radius: 6px;
+  font-size: 12px;
+  line-height: 1.3;
+}
+
+#selected {
+  position: absolute;
+  right: 12px; top: 12px;
+  background: rgba(0,0,0,0.4);
+  padding: 8px 10px;
+  border-radius: 6px;
+  font-size: 12px;
+}
+
+#music {
+  position: absolute;
+  right: 12px; top: 58px;
+  background: rgba(0,0,0,0.4);
+  padding: 8px 10px;
+  border-radius: 6px;
+  font-size: 12px;
+}
+
+#crosshair {
+  position: absolute;
+  left: 50%; top: 50%;
+  transform: translate(-50%, -50%);
+  font-size: 20px;
+  color: rgba(255,255,255,0.9);
+  text-shadow: 0 0 2px rgba(0,0,0,0.8);
+}

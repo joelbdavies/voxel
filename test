@@ -1,0 +1,184 @@
+• Edited dev/scratch/minecraft/public/main.js (+181 -0)
+    9
+    10    +// --- Audio (8-bit SFX + music) ---
+    11    +let audioCtx = null;
+    12    +let masterGain, sfxGain, musicGain;
+    13    +let musicEnabled = true;
+    14    +let sfxEnabled = true;
+    15    +let musicTimer = null;
+    16    +let nextNoteTime = 0;
+    17    +let musicStep = 0;
+    18    +
+    19    +function initAudio(){
+    20    +  if (audioCtx) return;
+    21    +  try {
+    22    +    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    23    +  } catch (e) {
+    24    +    console.warn('WebAudio unsupported');
+    25    +    return;
+    26    +  }
+    27    +  masterGain = audioCtx.createGain();
+    28    +  masterGain.gain.value = 0.9;
+    29    +  masterGain.connect(audioCtx.destination);
+    30    +  sfxGain = audioCtx.createGain();
+    31    +  sfxGain.gain.value = 0.35;
+    32    +  sfxGain.connect(masterGain);
+    33    +  musicGain = audioCtx.createGain();
+    34    +  musicGain.gain.value = 0.18;
+    35    +  musicGain.connect(masterGain);
+    36    +  if (musicEnabled) startMusic();
+    37    +}
+    38    +
+    39    +function resumeAudio(){
+    40    +  if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
+    41    +}
+    42    +
+    43    +function mtof(m){ return 440 * Math.pow(2, (m-69)/12); }
+    44    +
+    45    +function envGain(node, t, a, d, s, r, dur){
+    46    +  const g = node.gain;
+    47    +  g.cancelScheduledValues(t);
+    48    +  g.setValueAtTime(0.0001, t);
+    49    +  g.exponentialRampToValueAtTime(1.0, t + a);
+    50    +  g.exponentialRampToValueAtTime(Math.max(0.0001, s), t + a + d);
+    51    +  g.setTargetAtTime(0.0001, t + dur, r);
+    52    +}
+    53    +
+    54    +function playTone({type='square', freq=440, dur=0.08, vol=1.0, slideTo=null, slideTime=0.05, out=mixSfx()}){
+    55    +  if (!audioCtx || !sfxEnabled) return;
+    56    +  const t = audioCtx.currentTime;
+    57    +  const osc = audioCtx.createOscillator();
+    58    +  const g = audioCtx.createGain();
+    59    +  osc.type = type;
+    60    +  osc.frequency.setValueAtTime(freq, t);
+    61    +  if (slideTo){ osc.frequency.linearRampToValueAtTime(slideTo, t+slideTime); }
+    62    +  g.gain.value = 0.0001;
+    63    +  envGain(g, t, 0.002, 0.05, 0.2*vol, 0.05, dur);
+    64    +  osc.connect(g).connect(out);
+    65    +  osc.start(t);
+    66    +  osc.stop(t + dur + 0.1);
+    67    +}
+    68    +
+    69    +function playNoise({dur=0.06, vol=0.4, type='highpass', cutoff=600, q=0}){
+    70    +  if (!audioCtx || !sfxEnabled) return;
+    71    +  const t = audioCtx.currentTime;
+    72    +  const bufferSize = Math.max(1, Math.floor(audioCtx.sampleRate * dur));
+    73    +  const buffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
+    74    +  const data = buffer.getChannelData(0);
+    75    +  for (let i=0; i<bufferSize; i++) data[i] = Math.random()*2-1;
+    76    +  const src = audioCtx.createBufferSource();
+    77    +  src.buffer = buffer;
+    78    +  const g = audioCtx.createGain();
+    79    +  g.gain.value = 0.0001;
+    80    +  envGain(g, t, 0.001, 0.03, 0.15*vol, 0.05, dur);
+    81    +  let out = g;
+    82    +  if (type){
+    83    +    const biq = audioCtx.createBiquadFilter();
+    84    +    biq.type = type;
+    85    +    biq.frequency.value = cutoff;
+    86    +    biq.Q.value = q;
+    87    +    src.connect(biq).connect(g);
+    88    +  } else {
+    89    +    src.connect(g);
+    90    +  }
+    91    +  g.connect(mixSfx());
+    92    +  src.start(t);
+    93    +}
+    94    +
+    95    +function mixSfx(){ return sfxGain || audioCtx.destination; }
+    96    +function mixMusic(){ return musicGain || audioCtx.destination; }
+    97    +
+    98    +function sfxBreak(){ playNoise({dur:0.07, vol:0.55, type:'bandpass', cutoff:900, q:0.8}); }
+    99    +function sfxPlace(){ playTone({type:'square', freq:680, slideTo:420, slideTime:0.05, dur:0.08, vol:0.7}); }
+    100   +function sfxJump(){ playTone({type:'square', freq:380, slideTo:760, slideTime:0.10, dur:0.12, vol:0.6}); }
+    101   +function sfxStep(){ playNoise({dur:0.03, vol:0.25, type:'highpass', cutoff:700}); }
+    102   +
+    103   +// Simple chiptune scheduler
+    104   +const BPM = 128;
+    105   +const SEC_PER_BEAT = 60 / BPM;
+    106   +const STEP = SEC_PER_BEAT / 4; // 16th notes
+    107   +const SONG_STEPS = 64; // 4 bars
+    108   +
+    109   +const leadPattern = [
+    110   +  76, , 79, , 81, , 79, , 76, , 79, , 81, , 84, ,
+    111   +  76, , 79, , 81, , 83, , 81, , 79, , 76, , 72, ,
+    112   +  74, , 77, , 79, , 77, , 74, , 77, , 79, , 81, ,
+    113   +  74, , 77, , 79, , 81, , 79, , 77, , 74, , 71, ,
+    114   +];
+    115   +const bassPattern = [
+    116   +  45, , , , 45, , , , 41, , , , 41, , , ,
+    117   +  43, , , , 43, , , , 47, , , , 47, , , ,
+    118   +  41, , , , 41, , , , 38, , , , 38, , , ,
+    119   +  40, , , , 40, , , , 47, , , , 47, , , ,
+    120   +];
+    121   +
+    122   +function scheduleStep(time, step){
+    123   +  // lead
+    124   +  const l = leadPattern[step % leadPattern.length];
+    125   +  if (l){
+    126   +    const o = audioCtx.createOscillator();
+    127   +    o.type = 'square';
+    128   +    o.frequency.value = mtof(l);
+    129   +    const g = audioCtx.createGain();
+    130   +    g.gain.value = 0.0001;
+    131   +    envGain(g, time, 0.002, 0.06, 0.25, 0.05, STEP*0.9);
+    132   +    o.connect(g).connect(mixMusic());
+    133   +    o.start(time);
+    134   +    o.stop(time + STEP*0.95);
+    135   +  }
+    136   +  // bass
+    137   +  const b = bassPattern[step % bassPattern.length];
+    138   +  if (b){
+    139   +    const o = audioCtx.createOscillator();
+    140   +    o.type = 'triangle';
+    141   +    o.frequency.value = mtof(b);
+    142   +    const g = audioCtx.createGain();
+    143   +    g.gain.value = 0.0001;
+    144   +    envGain(g, time, 0.002, 0.05, 0.2, 0.08, STEP);
+    145   +    o.connect(g).connect(mixMusic());
+    146   +    o.start(time);
+    147   +    o.stop(time + STEP);
+    148   +  }
+    149   +  // hat on off-beats
+    150   +  if (step % 2 === 1){
+    151   +    const t = time;
+    152   +    const bufferSize = Math.max(1, Math.floor(audioCtx.sampleRate * 0.02));
+    153   +    const buffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
+    154   +    const data = buffer.getChannelData(0);
+    155   +    for (let i=0;i<bufferSize;i++) data[i] = Math.random()*2-1;
+    156   +    const src = audioCtx.createBufferSource(); src.buffer = buffer;
+    157   +    const hp = audioCtx.createBiquadFilter(); hp.type='highpass'; hp.frequency.value=3000;
+    158   +    const g = audioCtx.createGain(); g.gain.value=0.0001; envGain(g, t, 0.001, 0.01, 0.12, 0.03, 0.02);
+    159   +    src.connect(hp).connect(g).connect(mixMusic()); src.start(t);
+    160   +  }
+    161   +  // kick on downbeats
+    162   +  if (step % 4 === 0){
+    163   +    const o = audioCtx.createOscillator(); o.type='sine';
+    164   +    const g = audioCtx.createGain(); g.gain.value=0.0001;
+    165   +    o.frequency.setValueAtTime(110, time);
+    166   +    o.frequency.exponentialRampToValueAtTime(48, time+0.12);
+    167   +    envGain(g, time, 0.001, 0.05, 0.3, 0.06, 0.15);
+    168   +    o.connect(g).connect(mixMusic()); o.start(time); o.stop(time+0.18);
+    169   +  }
+    170   +}
+    171   +
+    172   +function startMusic(){
+    173   +  if (!audioCtx) return;
+    174   +  stopMusic();
+    175   +  nextNoteTime = audioCtx.currentTime + 0.05;
+    176   +  musicStep = 0;
+    177   +  musicTimer = setInterval(()=>{
+    178   +    const lookAhead = 0.2;
+    179   +    while (nextNoteTime < audioCtx.currentTime + lookAhead){
+    180   +      scheduleStep(nextNoteTime, musicStep);
+    181   +      nextNoteTime += STEP;
+    182   +      musicStep = (musicStep + 1) % SONG_STEPS;
+    183   +    }
+    184   +  }, 25);
+    185   +}
+    186   +
+    187   +function stopMusic(){
+    188   +  if (musicTimer){ clearInterval(musicTimer); musicTimer=null; }
+    189   +}
+    190   +
+    191    // Resize canvas to CSS size

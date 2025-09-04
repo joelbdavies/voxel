@@ -1,0 +1,1296 @@
+// Minimal Minecraft-like voxel demo
+// - WebGL block renderer with atlas
+// - WASD + mouse look + jump + sprint
+// - Collisions (AABB) and gravity
+// - Break/place blocks with raycast
+
+const canvas = document.getElementById('glcanvas');
+const selectedEl = document.getElementById('selected');
+const musicEl = document.getElementById('music');
+
+// --- Audio (8-bit SFX + music) ---
+let audioCtx = null;
+let masterGain, sfxGain, musicGain;
+let musicEnabled = true;
+let sfxEnabled = true;
+let musicTimer = null;
+let musicStartTimer = null; // delay between tracks
+let nextNoteTime = 0;
+let musicStep = 0;
+let currentTrackIndex = 0;
+const DEFAULT_BPM = 128; // original tempo for Track 1
+let BPM = DEFAULT_BPM;
+let SEC_PER_BEAT = 60 / BPM;
+let STEP = SEC_PER_BEAT / 4; // 16th notes (original grid)
+const SONG_STEPS = 64; // 4 bars
+
+function initAudio(){
+  if (audioCtx) return;
+  try {
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  } catch (e) {
+    console.warn('WebAudio unsupported');
+    return;
+  }
+  masterGain = audioCtx.createGain();
+  masterGain.gain.value = 0.9;
+  masterGain.connect(audioCtx.destination);
+  sfxGain = audioCtx.createGain();
+  sfxGain.gain.value = 0.35;
+  sfxGain.connect(masterGain);
+  musicGain = audioCtx.createGain();
+  musicGain.gain.value = 0.18;
+  musicGain.connect(masterGain);
+  if (musicEnabled) startMusic();
+}
+
+function resumeAudio(){
+  if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
+}
+
+function mtof(m){ return 440 * Math.pow(2, (m-69)/12); }
+
+function envGain(node, t, a, d, s, r, dur){
+  const g = node.gain;
+  g.cancelScheduledValues(t);
+  g.setValueAtTime(0.0001, t);
+  g.exponentialRampToValueAtTime(1.0, t + a);
+  g.exponentialRampToValueAtTime(Math.max(0.0001, s), t + a + d);
+  g.setTargetAtTime(0.0001, t + dur, r);
+}
+
+function playTone({type='square', freq=440, dur=0.08, vol=1.0, slideTo=null, slideTime=0.05, out=mixSfx()}){
+  if (!audioCtx || !sfxEnabled) return;
+  const t = audioCtx.currentTime;
+  const osc = audioCtx.createOscillator();
+  const g = audioCtx.createGain();
+  osc.type = type;
+  osc.frequency.setValueAtTime(freq, t);
+  if (slideTo){ osc.frequency.linearRampToValueAtTime(slideTo, t+slideTime); }
+  g.gain.value = 0.0001;
+  envGain(g, t, 0.002, 0.05, 0.2*vol, 0.05, dur);
+  osc.connect(g).connect(out);
+  osc.start(t);
+  osc.stop(t + dur + 0.1);
+}
+
+function playNoise({dur=0.06, vol=0.4, type='highpass', cutoff=600, q=0}){
+  if (!audioCtx || !sfxEnabled) return;
+  const t = audioCtx.currentTime;
+  const bufferSize = Math.max(1, Math.floor(audioCtx.sampleRate * dur));
+  const buffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
+  const data = buffer.getChannelData(0);
+  for (let i=0; i<bufferSize; i++) data[i] = Math.random()*2-1;
+  const src = audioCtx.createBufferSource();
+  src.buffer = buffer;
+  const g = audioCtx.createGain();
+  g.gain.value = 0.0001;
+  envGain(g, t, 0.001, 0.03, 0.15*vol, 0.05, dur);
+  let out = g;
+  if (type){
+    const biq = audioCtx.createBiquadFilter();
+    biq.type = type;
+    biq.frequency.value = cutoff;
+    biq.Q.value = q;
+    src.connect(biq).connect(g);
+  } else {
+    src.connect(g);
+  }
+  g.connect(mixSfx());
+  src.start(t);
+}
+
+function mixSfx(){ return sfxGain || audioCtx.destination; }
+function mixMusic(){ return musicGain || audioCtx.destination; }
+
+function sfxBreak(){ playNoise({dur:0.07, vol:0.55, type:'bandpass', cutoff:900, q:0.8}); }
+function sfxPlace(){ playTone({type:'square', freq:680, slideTo:420, slideTime:0.05, dur:0.08, vol:0.7}); }
+function sfxJump(){ playTone({type:'square', freq:380, slideTo:760, slideTime:0.10, dur:0.12, vol:0.6}); }
+function sfxStep(){ playNoise({dur:0.03, vol:0.25, type:'highpass', cutoff:700}); }
+
+// Simple chiptune scheduler and multiple tracks
+// Flatten rows into a single array while preserving holes (rests)
+function pattern(...rows){
+  const out = [];
+  for (const row of rows){
+    const base = out.length;
+    out.length = base + row.length;
+    for (let i=0;i<row.length;i++){
+      if (i in row) out[base + i] = row[i]; // leave holes as rests
+    }
+  }
+  return out;
+}
+
+// Exact original single-track patterns (preserve rests)
+const leadPatternOriginal = [
+  76, , 79, , 81, , 79, , 76, , 79, , 81, , 84, ,
+  76, , 79, , 81, , 83, , 81, , 79, , 76, , 72, ,
+  74, , 77, , 79, , 77, , 74, , 77, , 79, , 81, ,
+  74, , 77, , 79, , 81, , 79, , 77, , 74, , 71, ,
+];
+const bassPatternOriginal = [
+  45, , , , 45, , , , 41, , , , 41, , , ,
+  43, , , , 43, , , , 47, , , , 47, , , ,
+  41, , , , 41, , , , 38, , , , 38, , , ,
+  40, , , , 40, , , , 47, , , , 47, , , ,
+];
+
+// Debug: ensure original pattern lengths are as expected
+console.log('[Track1] leadPatternOriginal.length =', leadPatternOriginal.length,
+            'bassPatternOriginal.length =', bassPatternOriginal.length);
+
+const tracks = [
+  {
+    name: 'Upbeat Meadow', bpm: 128,
+    // Custom handling for track 1 (use original arrays below)
+    lead: null,
+    bass: null,
+  },
+  {
+    name: 'Upbeat Meadow v2', bpm: 128,
+    lead: pattern(
+      [76,,79,,81,,79,, 76,,79,,81,,84,,],
+      [76,,79,,81,,83,, 81,,79,,76,,72,,],
+      [74,,77,,79,,77,, 74,,77,,79,,81,,],
+      [74,,77,,79,,81,, 79,,77,,74,,71,,],
+    ),
+    bass: pattern(
+      [45, , , , 45, , , , 41, , , , 41, , , ,],
+      [43, , , , 43, , , , 47, , , , 47, , , ,],
+      [41, , , , 41, , , , 38, , , , 38, , , ,],
+      [40, , , , 40, , , , 47, , , , 47, , , ,],
+    ),
+  },
+  {
+    name: 'Chill Plains', bpm: 100,
+    lead: pattern(
+      [72,,74,,76,,79,, 76,,74,,72,,69,,],
+      [72,,74,,76,,79,, 81,,79,,76,,74,,],
+      [71,,72,,74,,76,, 74,,72,,71,,69,,],
+      [71,,72,,74,,76,, 78,,76,,74,,72,,],
+    ),
+    bass: pattern(
+      [36,,, ,36,,, ,33,,, ,33,,, ,],
+      [31,,, ,31,,, ,38,,, ,38,,, ,],
+      [33,,, ,33,,, ,29,,, ,29,,, ,],
+      [31,,, ,31,,, ,38,,, ,38,,, ,],
+    ),
+  },
+  {
+    name: 'Minor Depths', bpm: 120,
+    lead: pattern(
+      [69,,72,,74,,76,, 74,,72,,71,,69,,],
+      [71,,74,,76,,78,, 76,,74,,72,,71,,],
+      [69,,72,,74,,76,, 78,,76,,74,,72,,],
+      [67,,71,,72,,74,, 72,,71,,69,,67,,],
+    ),
+    bass: pattern(
+      [45,,, ,45,,, ,40,,, ,40,,, ,],
+      [43,,, ,43,,, ,38,,, ,38,,, ,],
+      [40,,, ,40,,, ,36,,, ,36,,, ,],
+      [38,,, ,38,,, ,43,,, ,43,,, ,],
+    ),
+  },
+  {
+    name: 'Arp Fields', bpm: 140,
+    lead: pattern(
+      [72,76,79,84, 72,76,79,84, 72,76,79,84, 72,76,79,84],
+      [74,77,81,86, 74,77,81,86, 74,77,81,86, 74,77,81,86],
+      [72,76,79,84, 72,76,79,84, 74,77,81,86, 74,77,81,86],
+      [76,79,83,88, 76,79,83,88, 72,76,79,84, 72,76,79,84],
+    ),
+    bass: pattern(
+      [48,,,48, 48,,,48, 45,,,45, 45,,,45],
+      [50,,,50, 50,,,50, 48,,,48, 48,,,48],
+      [48,,,48, 48,,,48, 50,,,50, 50,,,50],
+      [52,,,52, 52,,,52, 48,,,48, 48,,,48],
+    ),
+  },
+  {
+    name: 'Night Run', bpm: 132,
+    lead: pattern(
+      [79,,79,, 81,,83,, 81,,79,, 76,,74,,],
+      [79,,79,, 81,,83,, 84,,83,, 81,,79,,],
+      [76,,76,, 78,,79,, 78,,76,, 74,,72,,],
+      [76,,76,, 78,,79,, 81,,79,, 78,,76,,],
+    ),
+    bass: pattern(
+      [40,,, ,40,,, ,47,,, ,47,,, ,],
+      [38,,, ,38,,, ,45,,, ,45,,, ,],
+      [36,,, ,36,,, ,43,,, ,43,,, ,],
+      [35,,, ,35,,, ,43,,, ,43,,, ,],
+    ),
+  },
+  {
+    name: 'Lofi Hills', bpm: 90,
+    lead: pattern(
+      [72,0,0,0, 0,0,0,0, 74,0,0,0, 0,0,0,0],
+      [72,0,0,0, 0,0,0,0, 69,0,0,0, 0,0,0,0],
+      [72,0,0,0, 0,0,0,0, 74,0,0,0, 0,0,0,0],
+      [76,0,0,0, 0,0,0,0, 72,0,0,0, 0,0,0,0],
+    ),
+    bass: pattern(
+      [36,,, ,36,,, ,33,,, ,33,,, ,],
+      [31,,, ,31,,, ,36,,, ,36,,, ,],
+      [29,,, ,29,,, ,33,,, ,33,,, ,],
+      [28,,, ,28,,, ,36,,, ,36,,, ,],
+    ),
+  },
+];
+
+// Debug: log lead/bass lengths for pattern-based tracks (exclude Track 1)
+for (let i = 1; i < tracks.length; i++) {
+  const tr = tracks[i];
+  if (!tr || !tr.lead || !tr.bass) continue;
+  console.log(`[Track ${i+1}] ${tr.name} lead.length =`, tr.lead.length, 'bass.length =', tr.bass.length);
+}
+
+
+function updateMusicTiming(){
+  const tr = tracks[currentTrackIndex];
+  BPM = (currentTrackIndex===0) ? DEFAULT_BPM : (tr && tr.bpm ? tr.bpm : DEFAULT_BPM);
+  SEC_PER_BEAT = 60 / BPM;
+  STEP = SEC_PER_BEAT / 4; // 16th grid for all tracks (Track 1 matches original exactly)
+}
+
+function scheduleStep(time, step){
+  const tr = tracks[currentTrackIndex];
+  // Track 1: use original arrays (exact match to the old behavior)
+  if (currentTrackIndex === 0){
+    const l0 = leadPatternOriginal[step % leadPatternOriginal.length];
+    if (l0){
+      const o = audioCtx.createOscillator();
+      o.type = 'square';
+      o.frequency.value = mtof(l0);
+      const g = audioCtx.createGain();
+      g.gain.value = 0.0001;
+      envGain(g, time, 0.002, 0.06, 0.25, 0.05, STEP*0.9);
+      o.connect(g).connect(mixMusic());
+      o.start(time);
+      o.stop(time + STEP*0.95);
+    }
+    const b0 = bassPatternOriginal[step % bassPatternOriginal.length];
+    if (b0){
+      const o = audioCtx.createOscillator();
+      o.type = 'triangle';
+      o.frequency.value = mtof(b0);
+      const g = audioCtx.createGain();
+      g.gain.value = 0.0001;
+      envGain(g, time, 0.002, 0.05, 0.2, 0.08, STEP);
+      o.connect(g).connect(mixMusic());
+      o.start(time);
+      o.stop(time + STEP);
+    }
+    // hat and kick remain grid-based
+    if (step % 2 === 1){
+      const t = time;
+      const bufferSize = Math.max(1, Math.floor(audioCtx.sampleRate * 0.02));
+      const buffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
+      const data = buffer.getChannelData(0);
+      for (let i=0;i<bufferSize;i++) data[i] = Math.random()*2-1;
+      const src = audioCtx.createBufferSource(); src.buffer = buffer;
+      const hp = audioCtx.createBiquadFilter(); hp.type='highpass'; hp.frequency.value=3000;
+      const g = audioCtx.createGain(); g.gain.value=0.0001; envGain(g, t, 0.001, 0.01, 0.12, 0.03, 0.02);
+      src.connect(hp).connect(g).connect(mixMusic()); src.start(t);
+    }
+    if (step % 4 === 0){
+      const o = audioCtx.createOscillator(); o.type='sine';
+      const g = audioCtx.createGain(); g.gain.value=0.0001;
+      o.frequency.setValueAtTime(110, time);
+      o.frequency.exponentialRampToValueAtTime(48, time+0.12);
+      envGain(g, time, 0.001, 0.05, 0.3, 0.06, 0.15);
+      o.connect(g).connect(mixMusic()); o.start(time); o.stop(time+0.18);
+    }
+    return;
+  }
+  // Other tracks: use per‑track arrays; index by bar step to keep parts aligned
+  const idx = step % SONG_STEPS;
+  const l = tr.lead[idx];
+  if (l){
+    const o = audioCtx.createOscillator();
+    o.type = 'square';
+    o.frequency.value = mtof(l);
+    const g = audioCtx.createGain();
+    g.gain.value = 0.0001;
+    envGain(g, time, 0.002, 0.06, 0.25, 0.05, STEP*0.9);
+    o.connect(g).connect(mixMusic());
+    o.start(time);
+    o.stop(time + STEP*0.95);
+  }
+  // bass
+  const b = tr.bass[idx];
+  if (b){
+    const o = audioCtx.createOscillator();
+    o.type = 'triangle';
+    o.frequency.value = mtof(b);
+    const g = audioCtx.createGain();
+    g.gain.value = 0.0001;
+    envGain(g, time, 0.002, 0.05, 0.2, 0.08, STEP);
+    o.connect(g).connect(mixMusic());
+    o.start(time);
+    o.stop(time + STEP);
+  }
+  // hat on off-beats
+  if (step % 2 === 1){
+    const t = time;
+    const bufferSize = Math.max(1, Math.floor(audioCtx.sampleRate * 0.02));
+    const buffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
+    const data = buffer.getChannelData(0);
+    for (let i=0;i<bufferSize;i++) data[i] = Math.random()*2-1;
+    const src = audioCtx.createBufferSource(); src.buffer = buffer;
+    const hp = audioCtx.createBiquadFilter(); hp.type='highpass'; hp.frequency.value=3000;
+    const g = audioCtx.createGain(); g.gain.value=0.0001; envGain(g, t, 0.001, 0.01, 0.12, 0.03, 0.02);
+    src.connect(hp).connect(g).connect(mixMusic()); src.start(t);
+  }
+  // kick on downbeats (quarter notes on 16th grid => every 4 steps)
+  if (step % 4 === 0){
+    const o = audioCtx.createOscillator(); o.type='sine';
+    const g = audioCtx.createGain(); g.gain.value=0.0001;
+    o.frequency.setValueAtTime(110, time);
+    o.frequency.exponentialRampToValueAtTime(48, time+0.12);
+    envGain(g, time, 0.001, 0.05, 0.3, 0.06, 0.15);
+    o.connect(g).connect(mixMusic()); o.start(time); o.stop(time+0.18);
+  }
+}
+
+function startMusic(){
+  if (!audioCtx) return;
+  stopMusic();
+  updateMusicTiming();
+  nextNoteTime = audioCtx.currentTime + 0.05;
+  musicStep = 0;
+  musicTimer = setInterval(()=>{
+    const lookAhead = 0.2;
+    while (nextNoteTime < audioCtx.currentTime + lookAhead){
+      scheduleStep(nextNoteTime, musicStep);
+      nextNoteTime += STEP;
+      musicStep = (musicStep + 1) % SONG_STEPS;
+    }
+  }, 25);
+}
+
+function stopMusic(){
+  if (musicTimer){ clearInterval(musicTimer); musicTimer=null; }
+  if (musicStartTimer){ clearTimeout(musicStartTimer); musicStartTimer=null; }
+}
+
+function updateMusicLabel(){
+  const tr = tracks[currentTrackIndex];
+  if (musicEl) musicEl.textContent = `Track ${currentTrackIndex+1}/`+tracks.length+`: ${tr.name} (${tr && tr.bpm ? tr.bpm : DEFAULT_BPM} BPM)`;
+}
+
+function setTrack(i){
+  if (i<0) i = tracks.length-1; if (i>=tracks.length) i=0;
+  const prev = currentTrackIndex;
+  currentTrackIndex = i;
+  updateMusicLabel();
+  if (audioCtx && musicEnabled){
+    // Insert a short gap (0.5s) when changing songs to avoid abrupt overlap
+    if (musicStartTimer){ clearTimeout(musicStartTimer); musicStartTimer=null; }
+    stopMusic();
+    musicStartTimer = setTimeout(()=>{ musicStartTimer=null; startMusic(); }, 500);
+  }
+}
+
+// Resize canvas to CSS size
+function resizeCanvasToDisplaySize() {
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  const w = Math.floor(canvas.clientWidth * dpr);
+  const h = Math.floor(canvas.clientHeight * dpr);
+  if (canvas.width !== w || canvas.height !== h) {
+    canvas.width = w;
+    canvas.height = h;
+  }
+}
+
+// WebGL setup
+const gl = canvas.getContext('webgl', { antialias: false, alpha: false });
+if (!gl) alert('WebGL not supported');
+
+// Shaders
+const VS = `
+attribute vec3 a_pos;
+attribute vec3 a_norm;
+attribute vec2 a_uv;
+uniform mat4 u_proj; 
+uniform mat4 u_view;
+varying vec3 v_norm;
+varying vec2 v_uv;
+void main(){
+  v_norm = a_norm;
+  v_uv = a_uv;
+  gl_Position = u_proj * u_view * vec4(a_pos,1.0);
+}`;
+
+const FS = `
+precision mediump float;
+varying vec3 v_norm;
+varying vec2 v_uv;
+uniform sampler2D u_tex;
+void main(){
+  vec3 n = normalize(v_norm);
+  // bright directional light (sun) + ambient
+  vec3 L = normalize(vec3(0.4,0.8,0.2));
+  float diff = max(dot(n,L), 0.0);
+  float ambient = 0.35;
+  float light = clamp(ambient + diff * 0.75, 0.0, 1.2);
+  vec4 tex = texture2D(u_tex, v_uv);
+  gl_FragColor = vec4(tex.rgb * light, 1.0);
+}`;
+
+function makeShader(type, src){
+  const sh = gl.createShader(type);
+  gl.shaderSource(sh, src);
+  gl.compileShader(sh);
+  if(!gl.getShaderParameter(sh, gl.COMPILE_STATUS)){
+    console.error(gl.getShaderInfoLog(sh));
+    throw new Error('shader compile failed');
+  }
+  return sh;
+}
+const prog = gl.createProgram();
+gl.attachShader(prog, makeShader(gl.VERTEX_SHADER, VS));
+gl.attachShader(prog, makeShader(gl.FRAGMENT_SHADER, FS));
+gl.linkProgram(prog);
+if(!gl.getProgramParameter(prog, gl.LINK_STATUS)){
+  console.error(gl.getProgramInfoLog(prog));
+  throw new Error('program link failed');
+}
+gl.useProgram(prog);
+
+const a_pos = gl.getAttribLocation(prog, 'a_pos');
+const a_norm = gl.getAttribLocation(prog, 'a_norm');
+const a_uv = gl.getAttribLocation(prog, 'a_uv');
+const u_proj = gl.getUniformLocation(prog, 'u_proj');
+const u_view = gl.getUniformLocation(prog, 'u_view');
+const u_texLoc = gl.getUniformLocation(prog, 'u_tex');
+
+// Texture atlas generation (procedural) with bold borders per tile
+const TILE_SIZE = 64; // px per tile
+const TILES = 8; // 8x8 -> 64 tiles
+const ATLAS_SIZE = TILE_SIZE * TILES;
+
+const tileIndex = {
+  grass_top: 0,
+  grass_side: 1,
+  dirt: 2,
+  stone: 3,
+  sand: 4,
+  water: 5,
+  rock: 6,
+};
+
+function drawTile(ctx, idx, color, borderColor){
+  const x = (idx % TILES) * TILE_SIZE;
+  const y = Math.floor(idx / TILES) * TILE_SIZE;
+  ctx.fillStyle = color;
+  ctx.fillRect(x, y, TILE_SIZE, TILE_SIZE);
+  ctx.strokeStyle = borderColor;
+  ctx.lineWidth = 4;
+  ctx.strokeRect(x+2, y+2, TILE_SIZE-4, TILE_SIZE-4);
+  // slight noise for texture variation
+  const n = 200;
+  const imgData = ctx.getImageData(x, y, TILE_SIZE, TILE_SIZE);
+  for(let i=0;i<n;i++){
+    const px = (Math.random()*TILE_SIZE)|0;
+    const py = (Math.random()*TILE_SIZE)|0;
+    const idx4 = (py*TILE_SIZE+px)*4;
+    imgData.data[idx4+0] = (imgData.data[idx4+0]*0.9)|0;
+    imgData.data[idx4+1] = (imgData.data[idx4+1]*0.9)|0;
+    imgData.data[idx4+2] = (imgData.data[idx4+2]*0.9)|0;
+  }
+  ctx.putImageData(imgData, x, y);
+}
+
+const atlasCanvas = document.createElement('canvas');
+atlasCanvas.width = ATLAS_SIZE;
+atlasCanvas.height = ATLAS_SIZE;
+const actx = atlasCanvas.getContext('2d');
+// Create tiles
+drawTile(actx, tileIndex.grass_top, '#6fbf50', '#2a4f1b');
+drawTile(actx, tileIndex.grass_side, '#5aa143', '#2a4f1b');
+drawTile(actx, tileIndex.dirt, '#8b5a2b', '#3a2410');
+drawTile(actx, tileIndex.stone, '#9aa0a6', '#50565c');
+drawTile(actx, tileIndex.sand, '#e5d38c', '#8c7d3a');
+drawTile(actx, tileIndex.water, '#3fa7ff', '#135a8f');
+drawTile(actx, tileIndex.rock, '#808080', '#404040');
+
+// Upload as GL texture
+const tex = gl.createTexture();
+gl.bindTexture(gl.TEXTURE_2D, tex);
+gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
+gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, atlasCanvas);
+
+// Sky pass (full-screen) with gradient, clouds, and sun
+function makeProgram(vsSrc, fsSrc){
+  const vs = makeShader(gl.VERTEX_SHADER, vsSrc);
+  const fs = makeShader(gl.FRAGMENT_SHADER, fsSrc);
+  const p = gl.createProgram();
+  gl.attachShader(p, vs);
+  gl.attachShader(p, fs);
+  gl.linkProgram(p);
+  if(!gl.getProgramParameter(p, gl.LINK_STATUS)){
+    console.error(gl.getProgramInfoLog(p));
+    throw new Error('program link failed');
+  }
+  return p;
+}
+
+const SKY_VS = `
+attribute vec2 a_pos;
+varying vec2 v_uv;
+void main(){
+  v_uv = a_pos*0.5 + 0.5;
+  gl_Position = vec4(a_pos, 0.0, 1.0);
+}`;
+
+const SKY_FS = `
+precision mediump float;
+varying vec2 v_uv;
+uniform float u_time;
+
+// simple value noise
+float hash(vec2 p){ return fract(sin(dot(p, vec2(127.1,311.7))) * 43758.5453); }
+float noise(vec2 p){
+  vec2 i = floor(p);
+  vec2 f = fract(p);
+  float a = hash(i);
+  float b = hash(i + vec2(1.0, 0.0));
+  float c = hash(i + vec2(0.0, 1.0));
+  float d = hash(i + vec2(1.0, 1.0));
+  vec2 u = f*f*(3.0-2.0*f);
+  return mix(a, b, u.x) + (c - a)*u.y*(1.0 - u.x) + (d - b)*u.x*u.y;
+}
+
+void main(){
+  // vertical gradient sky
+  vec3 skyTop = vec3(0.38, 0.62, 0.95);
+  vec3 skyBottom = vec3(0.70, 0.88, 1.00);
+  float t = clamp(pow(v_uv.y, 0.65), 0.0, 1.0);
+  vec3 col = mix(skyBottom, skyTop, t);
+
+  // moving soft clouds
+  vec2 p = vec2(v_uv.x + u_time*0.01, v_uv.y*0.6);
+  float n = 0.0;
+  n += noise(p*2.5);
+  n += 0.5*noise(p*5.0 + 10.0);
+  n += 0.25*noise(p*10.0 + 50.0);
+  n /= 1.75;
+  float clouds = smoothstep(0.6, 0.82, n);
+  col = mix(col, vec3(1.0), clouds*0.55);
+
+  // sun disk + glow
+  vec2 sunPos = vec2(0.82, 0.22);
+  float d = distance(v_uv, sunPos);
+  float sun = smoothstep(0.06, 0.04, d);
+  float glow = smoothstep(0.28, 0.08, d);
+  vec3 sunColor = vec3(1.0, 0.96, 0.85);
+  col = mix(col, sunColor, glow*0.35);
+  col = mix(col, vec3(1.0), sun);
+
+  gl_FragColor = vec4(col, 1.0);
+}`;
+
+const skyProg = makeProgram(SKY_VS, SKY_FS);
+const sky_a_pos = gl.getAttribLocation(skyProg, 'a_pos');
+const sky_u_time = gl.getUniformLocation(skyProg, 'u_time');
+const skyVBO = gl.createBuffer();
+gl.bindBuffer(gl.ARRAY_BUFFER, skyVBO);
+// full-screen triangle
+gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([
+  -1, -1,
+   3, -1,
+  -1,  3,
+]), gl.STATIC_DRAW);
+
+// World generation
+const WORLD_W = 64;
+const WORLD_H = 32;
+const WORLD_D = 64;
+
+const blocks = new Uint8Array(WORLD_W * WORLD_H * WORLD_D); // 0=air, >0 block ids
+
+// --- Persistence (localStorage) ---
+const STORAGE_KEY = 'voxel_world_v1';
+const PLAYER_KEY = 'voxel_player_v1';
+
+function bytesToBase64(bytes){
+  let binary = '';
+  const chunk = 0x8000; // 32k chunks to avoid call stack overflow
+  for (let i=0; i<bytes.length; i+=chunk){
+    const sub = bytes.subarray(i, i+chunk);
+    binary += String.fromCharCode.apply(null, sub);
+  }
+  return btoa(binary);
+}
+function base64ToBytes(b64){
+  const binary = atob(b64);
+  const len = binary.length;
+  const out = new Uint8Array(len);
+  for (let i=0;i<len;i++) out[i] = binary.charCodeAt(i);
+  return out;
+}
+
+function saveWorld(){
+  try {
+    const payload = {
+      w: WORLD_W, h: WORLD_H, d: WORLD_D,
+      data: bytesToBase64(blocks)
+    };
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
+  } catch (e) {
+    console.warn('Failed saving world:', e);
+  }
+}
+function loadWorld(){
+  try {
+    const s = localStorage.getItem(STORAGE_KEY);
+    if (!s) return false;
+    const obj = JSON.parse(s);
+    if (obj.w !== WORLD_W || obj.h !== WORLD_H || obj.d !== WORLD_D) return false;
+    const arr = base64ToBytes(obj.data);
+    if (arr.length !== blocks.length) return false;
+    blocks.set(arr);
+    return true;
+  } catch (e) {
+    console.warn('Failed loading world:', e);
+    return false;
+  }
+}
+
+let saveTimer = null;
+function scheduleSave(){
+  if (saveTimer) clearTimeout(saveTimer);
+  saveTimer = setTimeout(saveWorld, 1000);
+}
+window.addEventListener('beforeunload', ()=>{ saveWorld(); savePlayer(); });
+document.addEventListener('visibilitychange', ()=>{
+  if (document.visibilityState === 'hidden'){ saveWorld(); savePlayer(); }
+});
+
+function clampPitch(p){
+  const lim = Math.PI/2 - 0.01;
+  return Math.max(-lim, Math.min(lim, p));
+}
+
+function savePlayer(){
+  try {
+    const payload = {
+      pos: player.pos,
+      yaw: player.yaw,
+      pitch: player.pitch,
+      sel: selectedIndex,
+    };
+    localStorage.setItem(PLAYER_KEY, JSON.stringify(payload));
+  } catch (e) {
+    console.warn('Failed saving player:', e);
+  }
+}
+function loadPlayer(){
+  try {
+    const s = localStorage.getItem(PLAYER_KEY);
+    if (!s) return false;
+    const obj = JSON.parse(s);
+    if (!obj || !Array.isArray(obj.pos) || obj.pos.length!==3) return false;
+    player.pos = [Number(obj.pos[0])||0, Number(obj.pos[1])||0, Number(obj.pos[2])||0];
+    player.yaw = Number(obj.yaw)||0;
+    player.pitch = clampPitch(Number(obj.pitch)||0);
+    if (typeof obj.sel === 'number'){
+      selectedIndex = ((obj.sel|0)%placeOptions.length + placeOptions.length)%placeOptions.length;
+      updateSelectedLabel();
+    }
+    return true;
+  } catch (e) {
+    console.warn('Failed loading player:', e);
+    return false;
+  }
+}
+
+function idx(x,y,z){ return x + z*WORLD_W + y*WORLD_W*WORLD_D; }
+
+// Simple pseudo-noise using sines for hills
+function heightAt(x,z){
+  const h = 10 + Math.floor(4*Math.sin(x*0.15) + 3*Math.cos(z*0.12) + 2*Math.sin((x+z)*0.1));
+  return Math.max(3, Math.min(WORLD_H-2, h));
+}
+
+const WATER_LEVEL = 8;
+
+// Try to load world; otherwise generate and then save
+if (!loadWorld()){
+  for(let z=0; z<WORLD_D; z++){
+    for(let x=0; x<WORLD_W; x++){
+      const h = heightAt(x,z);
+      for(let y=0; y<=h; y++){
+        const isTop = y===h;
+        let id = 0;
+        if (isTop) id = 1; // grass
+        else if (y >= h-2) id = 3; // dirt
+        else id = 4; // stone
+        blocks[idx(x,y,z)] = id;
+      }
+      // water fill to water level if terrain below
+      if (h < WATER_LEVEL){
+        for(let y=h+1; y<=WATER_LEVEL; y++){
+          blocks[idx(x,y,z)] = 5; // water (opaque here)
+        }
+      }
+    }
+  }
+  // initial save
+  saveWorld();
+}
+
+// Block type -> tile per face
+// ids: 0=air,1=grass,3=dirt,4=stone,5=water,6=sand,7=rock
+const BLOCK = {
+  AIR: 0,
+  GRASS: 1,
+  DIRT: 3,
+  STONE: 4,
+  WATER: 5,
+  SAND: 6,
+  ROCK: 7,
+};
+
+const BLOCK_TILES = {
+  [BLOCK.GRASS]: { top: tileIndex.grass_top, side: tileIndex.grass_side, bottom: tileIndex.dirt },
+  [BLOCK.DIRT]: { top: tileIndex.dirt, side: tileIndex.dirt, bottom: tileIndex.dirt },
+  [BLOCK.STONE]: { top: tileIndex.stone, side: tileIndex.stone, bottom: tileIndex.stone },
+  [BLOCK.WATER]: { top: tileIndex.water, side: tileIndex.water, bottom: tileIndex.water },
+  [BLOCK.SAND]:  { top: tileIndex.sand, side: tileIndex.sand, bottom: tileIndex.sand },
+  [BLOCK.ROCK]:  { top: tileIndex.rock, side: tileIndex.rock, bottom: tileIndex.rock },
+};
+
+function inBounds(x,y,z){
+  return x>=0 && z>=0 && y>=0 && x<WORLD_W && z<WORLD_D && y<WORLD_H;
+}
+function getBlock(x,y,z){
+  if (!inBounds(x,y,z)) return 0;
+  return blocks[idx(x,y,z)];
+}
+function setBlock(x,y,z,id){
+  if (!inBounds(x,y,z)) return;
+  blocks[idx(x,y,z)] = id;
+  worldDirty = true;
+  scheduleSave();
+}
+
+// World mesh generation (cull faces hidden by neighbors)
+let worldDirty = true;
+let vbuf = gl.createBuffer();
+let nbuf = gl.createBuffer();
+let tbuf = gl.createBuffer();
+let vCount = 0;
+
+const faceNormals = {
+  px: [1,0,0], nx: [-1,0,0], pz: [0,0,1], nz: [0,0,-1], py: [0,1,0], ny: [0,-1,0]
+};
+const faces = [
+  {dir:'px', off:[1,0,0], quad:[[1,0,0],[1,1,0],[1,1,1],[1,0,1]]},
+  {dir:'nx', off:[-1,0,0], quad:[[0,0,1],[0,1,1],[0,1,0],[0,0,0]]},
+  {dir:'pz', off:[0,0,1], quad:[[0,0,1],[1,0,1],[1,1,1],[0,1,1]]},
+  {dir:'nz', off:[0,0,-1], quad:[[0,0,0],[0,1,0],[1,1,0],[1,0,0]]},
+  {dir:'py', off:[0,1,0], quad:[[0,1,1],[1,1,1],[1,1,0],[0,1,0]]},
+  {dir:'ny', off:[0,-1,0], quad:[[0,0,0],[1,0,0],[1,0,1],[0,0,1]]},
+];
+
+function pushFace(vertices, normals, uvs, x,y,z, face, tile){
+  const q = face.quad; // [v0,v1,v2,v3]
+  const n = faceNormals[face.dir];
+  // Two triangles: (0,1,2) and (0,2,3)
+  const triIdx = [0,1,2, 0,2,3];
+  for (let i=0;i<6;i++){
+    const p = q[triIdx[i]];
+    vertices.push(x+p[0], y+p[1], z+p[2]);
+    normals.push(n[0], n[1], n[2]);
+  }
+  // UVs for the face using tile index
+  const t = tile;
+  const tx = (t % TILES);
+  const ty = Math.floor(t / TILES);
+  const eps = 1.5 / ATLAS_SIZE; // padding to avoid bleeding
+  const u0 = (tx * TILE_SIZE + eps) / ATLAS_SIZE;
+  const v0 = (ty * TILE_SIZE + eps) / ATLAS_SIZE;
+  const u1 = ((tx+1) * TILE_SIZE - eps) / ATLAS_SIZE;
+  const v1 = ((ty+1) * TILE_SIZE - eps) / ATLAS_SIZE;
+  // UVs correspond to quad verts order [0..3]
+  const uvQuad = [ [u0,v1],[u1,v1],[u1,v0],[u0,v0] ];
+  const uvTris = [uvQuad[0],uvQuad[1],uvQuad[2], uvQuad[0],uvQuad[2],uvQuad[3]];
+  for (let i=0;i<6;i++){
+    uvs.push(uvTris[i][0], uvTris[i][1]);
+  }
+}
+
+function rebuildWorld(){
+  const vertices = [];
+  const normals = [];
+  const uvs = [];
+  for(let y=0;y<WORLD_H;y++){
+    for(let z=0; z<WORLD_D; z++){
+      for(let x=0; x<WORLD_W; x++){
+        const id = getBlock(x,y,z);
+        if (id===0) continue;
+        const tiles = BLOCK_TILES[id] || BLOCK_TILES[BLOCK.STONE];
+        for (const face of faces){
+          const nx = x + face.off[0];
+          const ny = y + face.off[1];
+          const nz = z + face.off[2];
+          const neighbor = getBlock(nx,ny,nz);
+          if (neighbor===0){
+            const tile = face.dir==='py' ? tiles.top : face.dir==='ny' ? tiles.bottom : tiles.side;
+            pushFace(vertices, normals, uvs, x,y,z, face, tile);
+          }
+        }
+      }
+    }
+  }
+
+  vCount = vertices.length/3;
+  gl.bindBuffer(gl.ARRAY_BUFFER, vbuf);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(vertices), gl.STATIC_DRAW);
+  gl.enableVertexAttribArray(a_pos);
+  gl.vertexAttribPointer(a_pos, 3, gl.FLOAT, false, 0, 0);
+
+  gl.bindBuffer(gl.ARRAY_BUFFER, nbuf);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(normals), gl.STATIC_DRAW);
+  gl.enableVertexAttribArray(a_norm);
+  gl.vertexAttribPointer(a_norm, 3, gl.FLOAT, false, 0, 0);
+
+  gl.bindBuffer(gl.ARRAY_BUFFER, tbuf);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(uvs), gl.STATIC_DRAW);
+  gl.enableVertexAttribArray(a_uv);
+  gl.vertexAttribPointer(a_uv, 2, gl.FLOAT, false, 0, 0);
+
+  worldDirty = false;
+}
+
+// Camera and player
+const player = {
+  pos: [WORLD_W/2, 20, WORLD_D/2],
+  vel: [0,0,0],
+  yaw: 0,
+  pitch: 0,
+  onGround: false,
+};
+const EYE_HEIGHT = 1.62; // raise camera so we can see below
+let footstepAcc = 0;
+const FOOTSTEP_SPACING = 0.6; // meters between steps
+
+function respawn(){
+  const sx = (WORLD_W/2)|0;
+  const sz = (WORLD_D/2)|0;
+  let sy = WORLD_H-2;
+  for (let y=WORLD_H-2; y>=0; y--){
+    if (getBlock(sx,y,sz)!==0){ sy = y+3; break; }
+  }
+  player.pos = [sx+0.5, sy, sz+0.5];
+  player.vel = [0,0,0];
+  savePlayer();
+}
+function ensurePlayerNotStuck(){
+  // If inside blocks, try moving up to find free space
+  let tries = 10;
+  while (tries-- > 0 && aabbIntersectsBlock(player.pos[0], player.pos[1], player.pos[2])){
+    player.pos[1] += 0.5;
+  }
+  if (aabbIntersectsBlock(player.pos[0], player.pos[1], player.pos[2])){
+    respawn();
+  }
+}
+// Try load player; otherwise respawn
+if (!loadPlayer()) respawn(); else ensurePlayerNotStuck();
+
+// Controls
+const keys = new Set();
+let sprint = false;
+window.addEventListener('keydown', (e)=>{
+  keys.add(e.code);
+  if (!audioCtx) initAudio(); else resumeAudio();
+  if (e.code==='ShiftLeft' || e.code==='ShiftRight') sprint = true;
+  if (e.code==='KeyR') respawn();
+  if (e.code==='KeyM') {
+    initAudio();
+    resumeAudio();
+    musicEnabled = !musicEnabled;
+    if (musicEnabled) startMusic(); else stopMusic();
+  }
+  if (e.code==='Comma') { setTrack(currentTrackIndex-1); }
+  if (e.code==='Period') { setTrack(currentTrackIndex+1); }
+  if (e.code==='Digit1') { setTrack(0); }
+  if (e.code==='Digit2') { setTrack(1); }
+  if (e.code==='Digit3') { setTrack(2); }
+  if (e.code==='Digit4') { setTrack(3); }
+  if (e.code==='Digit5') { setTrack(4); }
+  if (e.code==='Digit6') { setTrack(5); }
+  if (e.code==='Digit7') { setTrack(6); }
+});
+window.addEventListener('keyup', (e)=>{
+  keys.delete(e.code);
+  if (e.code==='ShiftLeft' || e.code==='ShiftRight') sprint = false;
+});
+
+canvas.addEventListener('click', ()=>{
+  initAudio();
+  resumeAudio();
+  updateMusicLabel();
+  canvas.requestPointerLock();
+});
+
+document.addEventListener('pointerlockchange', ()=>{
+  if (document.pointerLockElement === canvas){
+    document.addEventListener('mousemove', onMouseMove);
+  } else {
+    document.removeEventListener('mousemove', onMouseMove);
+  }
+});
+
+function onMouseMove(e){
+  const sensitivity = 0.0025;
+  player.yaw -= e.movementX * sensitivity;
+  player.pitch -= e.movementY * sensitivity;
+  const lim = Math.PI/2 - 0.01;
+  if (player.pitch > lim) player.pitch = lim;
+  if (player.pitch < -lim) player.pitch = -lim;
+}
+
+// Block selection and actions
+const placeOptions = [BLOCK.GRASS, BLOCK.DIRT, BLOCK.STONE, BLOCK.SAND, BLOCK.ROCK, BLOCK.WATER];
+let selectedIndex = 0;
+function updateSelectedLabel(){
+  const names = {
+    [BLOCK.GRASS]: 'Grass',
+    [BLOCK.DIRT]: 'Dirt',
+    [BLOCK.STONE]: 'Stone',
+    [BLOCK.SAND]: 'Sand',
+    [BLOCK.ROCK]: 'Rock',
+    [BLOCK.WATER]: 'Water',
+  };
+  selectedEl.textContent = `Selected: ${names[placeOptions[selectedIndex]]}`;
+}
+updateSelectedLabel();
+
+// Cycle selected block: Q/E and [ ]
+window.addEventListener('keydown', (e)=>{
+  if (e.code==='KeyQ' || e.code==='BracketLeft') {
+    selectedIndex = (selectedIndex-1+placeOptions.length)%placeOptions.length; updateSelectedLabel(); savePlayer();
+  }
+  if (e.code==='KeyE' || e.code==='BracketRight') {
+    selectedIndex = (selectedIndex+1)%placeOptions.length; updateSelectedLabel(); savePlayer();
+  }
+});
+
+function placeSelectedBlockOnce(){
+  const yaw = player.yaw;
+  const camPos = [player.pos[0], player.pos[1] + EYE_HEIGHT, player.pos[2]];
+  const lookDir = [
+    -Math.sin(yaw)*Math.cos(player.pitch),
+    Math.sin(player.pitch),
+    -Math.cos(yaw)*Math.cos(player.pitch)
+  ];
+  const hit = raycast(camPos, lookDir, 6.0);
+  if (hit){
+    const placeId = placeOptions[selectedIndex];
+    const tx = hit.x + hit.face[0];
+    const ty = hit.y + hit.face[1];
+    const tz = hit.z + hit.face[2];
+    if (getBlock(tx,ty,tz)===BLOCK.AIR){
+      const px = player.pos[0], py = player.pos[1], pz = player.pos[2];
+      const inside = (tx+1 > px-PLAYER_W/2 && tx < px+PLAYER_W/2 &&
+                      ty+1 > py && ty < py+PLAYER_H &&
+                      tz+1 > pz-PLAYER_D/2 && tz < pz+PLAYER_D/2);
+      if (!inside) { setBlock(tx,ty,tz, placeId); sfxPlace(); }
+    }
+  }
+}
+
+function breakBlockOnce(){
+  const yaw = player.yaw;
+  const camPos = [player.pos[0], player.pos[1] + EYE_HEIGHT, player.pos[2]];
+  const lookDir = [
+    -Math.sin(yaw)*Math.cos(player.pitch),
+    Math.sin(player.pitch),
+    -Math.cos(yaw)*Math.cos(player.pitch)
+  ];
+  const hit = raycast(camPos, lookDir, 6.0);
+  if (hit){
+    setBlock(hit.x, hit.y, hit.z, BLOCK.AIR);
+    sfxBreak();
+  }
+}
+
+// Bind B to place once
+window.addEventListener('keydown', (e)=>{
+  if (e.code==='KeyB') {
+    e.preventDefault();
+    placeSelectedBlockOnce();
+  }
+});
+
+function placeBlockUnderPlayer(){
+  const px = player.pos[0], py = player.pos[1], pz = player.pos[2];
+  const bx = Math.floor(px);
+  const bz = Math.floor(pz);
+  let ty = Math.floor(py) - 1;
+  // Prefer placing directly under feet; if occupied, try current feet cell
+  if (getBlock(bx, ty, bz) !== BLOCK.AIR) {
+    ty = Math.floor(py);
+  }
+  if (!inBounds(bx, ty, bz) || getBlock(bx, ty, bz) !== BLOCK.AIR) return;
+  // Predict new bottom Y if we stand on top
+  const newY = ty + 1 + 1e-3;
+  // Only place if we can stand there without intersecting
+  if (!aabbIntersectsBlock(px, newY, pz)){
+    setBlock(bx, ty, bz, placeOptions[selectedIndex]);
+    // Snap player on top
+    player.pos[1] = newY;
+    player.vel[1] = 0;
+    player.onGround = true;
+    savePlayer();
+    sfxPlace();
+  }
+}
+
+// Bind V to place underfoot and pop up
+window.addEventListener('keydown', (e)=>{
+  if (e.code==='KeyV') {
+    e.preventDefault();
+    placeBlockUnderPlayer();
+  }
+});
+
+let mouseButtons = 0;
+window.addEventListener('mousedown', (e)=>{ 
+  mouseButtons |= 1<<e.button; 
+  // Only allow breaking when pointer is already locked to the canvas.
+  // This prevents the initial click-to-lock from breaking a block.
+  if (e.button === 0 && document.pointerLockElement === canvas) {
+    breakBlockOnce();
+  }
+});
+window.addEventListener('mouseup',   (e)=>{ mouseButtons &= ~(1<<e.button); });
+
+// Raycast blocks using 3D DDA
+function raycast(origin, dir, maxDist){
+  let x = Math.floor(origin[0]);
+  let y = Math.floor(origin[1]);
+  let z = Math.floor(origin[2]);
+
+  const stepX = dir[0] > 0 ? 1 : -1;
+  const stepY = dir[1] > 0 ? 1 : -1;
+  const stepZ = dir[2] > 0 ? 1 : -1;
+
+  const tDeltaX = Math.abs(1 / (dir[0] || 1e-6));
+  const tDeltaY = Math.abs(1 / (dir[1] || 1e-6));
+  const tDeltaZ = Math.abs(1 / (dir[2] || 1e-6));
+
+  let tMaxX = ((stepX>0) ? (Math.floor(origin[0])+1-origin[0]) : (origin[0]-Math.floor(origin[0]))) * tDeltaX;
+  let tMaxY = ((stepY>0) ? (Math.floor(origin[1])+1-origin[1]) : (origin[1]-Math.floor(origin[1]))) * tDeltaY;
+  let tMaxZ = ((stepZ>0) ? (Math.floor(origin[2])+1-origin[2]) : (origin[2]-Math.floor(origin[2]))) * tDeltaZ;
+
+  let t = 0;
+  let lastFace = [0,0,0];
+  while (t <= maxDist){
+    if (inBounds(x,y,z) && getBlock(x,y,z) !== BLOCK.AIR){
+      return { x, y, z, face: lastFace };
+    }
+    if (tMaxX < tMaxY){
+      if (tMaxX < tMaxZ){ x += stepX; t = tMaxX; tMaxX += tDeltaX; lastFace=[-stepX,0,0]; }
+      else { z += stepZ; t = tMaxZ; tMaxZ += tDeltaZ; lastFace=[0,0,-stepZ]; }
+    } else {
+      if (tMaxY < tMaxZ){ y += stepY; t = tMaxY; tMaxY += tDeltaY; lastFace=[0,-stepY,0]; }
+      else { z += stepZ; t = tMaxZ; tMaxZ += tDeltaZ; lastFace=[0,0,-stepZ]; }
+    }
+  }
+  return null;
+}
+
+// Physics and collision
+const PLAYER_W = 0.6, PLAYER_H = 1.8, PLAYER_D = 0.6;
+
+function aabbIntersectsBlock(px,py,pz){
+  const minX = Math.floor(px - PLAYER_W/2);
+  const maxX = Math.floor(px + PLAYER_W/2);
+  const minY = Math.floor(py);
+  const maxY = Math.floor(py + PLAYER_H);
+  const minZ = Math.floor(pz - PLAYER_D/2);
+  const maxZ = Math.floor(pz + PLAYER_D/2);
+  for(let y=minY; y<=maxY; y++){
+    for(let z=minZ; z<=maxZ; z++){
+      for(let x=minX; x<=maxX; x++){
+        if (getBlock(x,y,z)!==BLOCK.AIR) return true;
+      }
+    }
+  }
+  return false;
+}
+
+function moveAndCollide(dx,dy,dz){
+  const p = player.pos;
+  // X
+  p[0] += dx;
+  if (aabbIntersectsBlock(p[0], p[1], p[2])){
+    p[0] -= dx;
+  }
+  // Z
+  p[2] += dz;
+  if (aabbIntersectsBlock(p[0], p[1], p[2])){
+    p[2] -= dz;
+  }
+  // Y
+  p[1] += dy;
+  if (aabbIntersectsBlock(p[0], p[1], p[2])){
+    p[1] -= dy;
+    if (dy < 0) player.onGround = true;
+    player.vel[1] = 0;
+  } else {
+    if (dy < 0) player.onGround = false;
+  }
+}
+
+// Matrices
+function perspective(fovy, aspect, near, far){
+  const f = 1 / Math.tan(fovy/2);
+  const nf = 1/(near-far);
+  return new Float32Array([
+    f/aspect,0,0,0,
+    0,f,0,0,
+    0,0,(far+near)*nf,-1,
+    0,0,(2*far*near)*nf,0
+  ]);
+}
+function lookView(pos, yaw, pitch){
+  const cy=Math.cos(yaw), sy=Math.sin(yaw);
+  const cp=Math.cos(pitch), sp=Math.sin(pitch);
+  // Forward vector (camera looks down -Z at yaw=0)
+  const fx = -sy*cp; 
+  const fy = sp;
+  const fz = -cy*cp;
+  // Orthonormal basis
+  const rx = cy, ry = 0, rz = -sy; // right = normalize(cross([0,1,0], f))
+  const ux = sy*sp, uy = cp, uz = cy*sp; // up = cross(f, right)
+  // View matrix (column-major): [r u -f t]
+  const x = -(rx*pos[0] + ry*pos[1] + rz*pos[2]);
+  const y = -(ux*pos[0] + uy*pos[1] + uz*pos[2]);
+  const z =  (fx*pos[0] + fy*pos[1] + fz*pos[2]); // note +dot(f,pos)
+  return new Float32Array([
+    rx, ux, -fx, 0,
+    ry, uy, -fy, 0,
+    rz, uz, -fz, 0,
+    x,  y,   z,  1,
+  ]);
+}
+
+// Game loop
+let last = performance.now();
+function frame(now){
+  resizeCanvasToDisplaySize();
+  const dt = Math.min(0.05, (now-last)/1000); // clamp
+  last = now;
+
+  // Input -> desired velocity aligned to camera yaw
+  const speed = (sprint? 7.0 : 4.0);
+  let forward = 0, strafe = 0;
+  if (keys.has('KeyW')) forward += 1;
+  if (keys.has('KeyS')) forward -= 1;
+  if (keys.has('KeyA')) strafe -= 1;
+  if (keys.has('KeyD')) strafe += 1;
+  if (forward || strafe){
+    const len = Math.hypot(forward, strafe);
+    forward/=len; strafe/=len;
+  }
+  const yaw = player.yaw;
+  const fwdX = -Math.sin(yaw), fwdZ = -Math.cos(yaw);
+  const rightX =  Math.cos(yaw), rightZ = -Math.sin(yaw);
+  const vx = (forward*fwdX + strafe*rightX) * speed;
+  const vz = (forward*fwdZ + strafe*rightZ) * speed;
+  // Jump
+  if (keys.has('Space') && player.onGround){
+    player.vel[1] = 6.5;
+    player.onGround = false;
+    sfxJump();
+  }
+
+  // Gravity
+  player.vel[1] -= 20 * dt;
+
+  // Integrate with collisions (track horizontal delta for footsteps)
+  const prevX = player.pos[0], prevZ = player.pos[2];
+  moveAndCollide(vx*dt, player.vel[1]*dt, vz*dt);
+  const dx = player.pos[0] - prevX;
+  const dz = player.pos[2] - prevZ;
+  const moveDist = Math.hypot(dx, dz);
+  if (player.onGround && moveDist > 0.001){
+    footstepAcc += moveDist;
+    if (footstepAcc >= FOOTSTEP_SPACING){
+      footstepAcc = footstepAcc - FOOTSTEP_SPACING;
+      sfxStep();
+    }
+  }
+
+  // Raycast and block actions (instant)
+  const camPos = [player.pos[0], player.pos[1] + EYE_HEIGHT, player.pos[2]];
+  const lookDir = [
+    -Math.sin(yaw)*Math.cos(player.pitch),
+    Math.sin(player.pitch),
+    -Math.cos(yaw)*Math.cos(player.pitch)
+  ];
+  const hit = raycast(camPos, lookDir, 6.0);
+
+  if (worldDirty) rebuildWorld();
+
+  // Render
+  gl.viewport(0,0,gl.drawingBufferWidth, gl.drawingBufferHeight);
+  gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+
+  // Draw sky background
+  gl.disable(gl.DEPTH_TEST);
+  gl.depthMask(false);
+  gl.useProgram(skyProg);
+  gl.bindBuffer(gl.ARRAY_BUFFER, skyVBO);
+  gl.enableVertexAttribArray(sky_a_pos);
+  gl.vertexAttribPointer(sky_a_pos, 2, gl.FLOAT, false, 0, 0);
+  gl.uniform1f(sky_u_time, now * 0.001);
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
+  gl.depthMask(true);
+
+  // Draw world
+  gl.enable(gl.DEPTH_TEST);
+  gl.enable(gl.CULL_FACE);
+  gl.cullFace(gl.BACK);
+  gl.useProgram(prog);
+  // Rebind world vertex arrays after sky pass (attribute 0 likely changed)
+  gl.bindBuffer(gl.ARRAY_BUFFER, vbuf);
+  gl.enableVertexAttribArray(a_pos);
+  gl.vertexAttribPointer(a_pos, 3, gl.FLOAT, false, 0, 0);
+  gl.bindBuffer(gl.ARRAY_BUFFER, nbuf);
+  gl.enableVertexAttribArray(a_norm);
+  gl.vertexAttribPointer(a_norm, 3, gl.FLOAT, false, 0, 0);
+  gl.bindBuffer(gl.ARRAY_BUFFER, tbuf);
+  gl.enableVertexAttribArray(a_uv);
+  gl.vertexAttribPointer(a_uv, 2, gl.FLOAT, false, 0, 0);
+  // Ensure texture bound
+  gl.activeTexture(gl.TEXTURE0);
+  gl.bindTexture(gl.TEXTURE_2D, tex);
+  gl.uniform1i(u_texLoc, 0);
+  const proj = perspective(Math.PI/3, gl.drawingBufferWidth/gl.drawingBufferHeight, 0.1, 200.0);
+  const view = lookView(camPos, player.yaw, player.pitch);
+  gl.uniformMatrix4fv(u_proj, false, proj);
+  gl.uniformMatrix4fv(u_view, false, view);
+
+  gl.drawArrays(gl.TRIANGLES, 0, vCount);
+
+  requestAnimationFrame(frame);
+}
+
+rebuildWorld();
+requestAnimationFrame(frame);
+updateMusicLabel();
+
+// Basic safety: prevent context menu on RMB
+window.addEventListener('contextmenu', (e)=>e.preventDefault());

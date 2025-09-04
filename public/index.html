@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Voxel Craft</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <canvas id="glcanvas"></canvas>
+      <div id="hud">
+        <div id="instructions">
+          <strong>Voxel Craft</strong>
+          <div>Click canvas to lock mouse</div>
+          <div>WASD: Move, Space: Jump, Shift: Sprint</div>
+          <div>Left Click: Break, B: Place at crosshair</div>
+          <div>V: Place block under you</div>
+          <div>[ and ] (or Q/E): Cycle block</div>
+          <div>M: Toggle music, ,/.: Prev/Next track, 1–7: Pick track</div>
+          <div>R: Respawn, Esc: Unlock mouse</div>
+        </div>
+        <div id="selected"></div>
+        <div id="music"></div>
+        <div id="crosshair">+</div>
+      </div>
+    <script type="module" src="main.js"></script>
+  </body>
+  </html>
