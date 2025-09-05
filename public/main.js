@@ -9,6 +9,7 @@ const selectedEl = document.getElementById('selected');
 const cloudsEl = document.getElementById('clouds');
 const musicEl = document.getElementById('music');
 const torchEl = document.getElementById('torch');
+const fpsEl = document.getElementById('fps');
 const labEl = document.getElementById('musiclab');
 
 // --- Audio (8-bit SFX + music) ---
@@ -346,6 +347,7 @@ function resizeCanvasToDisplaySize() {
 }
 
 // WebGL setup
+// Disable MSAA for performance
 const gl = canvas.getContext('webgl', { antialias: false, alpha: false });
 if (!gl) alert('WebGL not supported');
 
@@ -1629,6 +1631,10 @@ function lookView(pos, yaw, pitch){
 let last = performance.now();
 let worldTime = 0; // seconds
 const DAY_LENGTH = 240; // seconds per full cycle (4 minutes)
+// FPS counter accumulators
+let fpsAccumTime = 0;
+let fpsAccumFrames = 0;
+let fpsLast = 0;
 function frame(now){
   resizeCanvasToDisplaySize();
   const dt = Math.min(0.05, (now-last)/1000); // clamp
@@ -1638,6 +1644,15 @@ function frame(now){
     worldTime = initialTimePhase * DAY_LENGTH;
   }
   worldTime += dt;
+  // FPS accumulation and update label ~1/sec
+  fpsAccumTime += dt;
+  fpsAccumFrames += 1;
+  if (fpsAccumTime >= 1.0){
+    fpsLast = Math.round(fpsAccumFrames / fpsAccumTime);
+    if (fpsEl) fpsEl.textContent = `FPS: ${fpsLast}`;
+    fpsAccumTime = 0;
+    fpsAccumFrames = 0;
+  }
 
   // Input -> desired velocity aligned to camera yaw
   const speed = (sprint? 7.0 : 4.0);
