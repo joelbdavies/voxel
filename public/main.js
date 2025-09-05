@@ -916,6 +916,7 @@ function saveSettings(){
       fxaaEnabled,
       musicEnabled,
       currentTrackIndex,
+      flyMode,
     };
     localStorage.setItem(SETTINGS_KEY, JSON.stringify(payload));
   } catch (e) {
@@ -934,6 +935,7 @@ function loadSettings(){
       if (typeof obj.fxaaEnabled === 'boolean') fxaaEnabled = obj.fxaaEnabled;
       if (typeof obj.musicEnabled === 'boolean') musicEnabled = obj.musicEnabled;
       if (typeof obj.currentTrackIndex === 'number') currentTrackIndex = (obj.currentTrackIndex|0);
+      if (typeof obj.flyMode === 'boolean') flyMode = obj.flyMode;
       return true;
     }
   } catch (e) {
@@ -1473,6 +1475,8 @@ loadSettings();
 updateCloudsLabel();
 updateTorchLabel();
 updateMusicLabel();
+// If flight was persisted, ensure consistent state
+if (flyMode) { try { player.onGround = false; player.vel[1] = 0; } catch(e){} }
 window.addEventListener('keydown', (e)=>{
   // If music lab is open, only allow 'G' to close it; ignore other game controls
   if (labEl && !labEl.classList.contains('hidden') && e.code !== 'KeyG') return;
@@ -1482,12 +1486,11 @@ window.addEventListener('keydown', (e)=>{
   if (e.code==='KeyR') respawn();
   if (e.code==='Space') {
     const t = performance.now();
-    if (t - lastSpaceTap < 300) {
+    // Only toggle flight on double-tap while on ground to avoid accidental toggles mid-air
+    if ((t - lastSpaceTap) < 300 && player.onGround) {
       flyMode = !flyMode;
-      if (flyMode) {
-        player.vel[1] = 0;
-        player.onGround = false;
-      }
+      if (flyMode) { player.vel[1] = 0; player.onGround = false; }
+      saveSettings();
     }
     lastSpaceTap = t;
   }
