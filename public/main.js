@@ -1020,9 +1020,9 @@ function loadPlayer(){
     player.pos = [Number(obj.pos[0])||0, Number(obj.pos[1])||0, Number(obj.pos[2])||0];
     player.yaw = Number(obj.yaw)||0;
     player.pitch = clampPitch(Number(obj.pitch)||0);
+    // Defer applying selected block until UI/init variables exist
     if (typeof obj.sel === 'number'){
-      selectedIndex = ((obj.sel|0)%placeOptions.length + placeOptions.length)%placeOptions.length;
-      updateSelectedLabel();
+      window.__loadedSelectedIndex = (obj.sel|0);
     }
     return true;
   } catch (e) {
@@ -1340,6 +1340,12 @@ function updateSelectedLabel(){
   selectedEl.textContent = `Selected: ${names[placeOptions[selectedIndex]]}`;
 }
 updateSelectedLabel();
+// Apply any loaded selection from storage now that variables exist
+if (typeof window !== 'undefined' && window.__loadedSelectedIndex != null){
+  selectedIndex = ((window.__loadedSelectedIndex|0)%placeOptions.length + placeOptions.length)%placeOptions.length;
+  updateSelectedLabel();
+  try { delete window.__loadedSelectedIndex; } catch {}
+}
 
 function updateCloudsLabel(){
   const names = ['No Clouds','Wispy','Both','Puffy'];
