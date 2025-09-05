@@ -368,13 +368,13 @@ precision mediump float;
 varying vec3 v_norm;
 varying vec2 v_uv;
 uniform sampler2D u_tex;
+uniform vec3 u_sunDir;
+uniform float u_ambient;
+uniform float u_sunDiffuse;
 void main(){
   vec3 n = normalize(v_norm);
-  // bright directional light (sun) + ambient
-  vec3 L = normalize(vec3(0.4,0.8,0.2));
-  float diff = max(dot(n,L), 0.0);
-  float ambient = 0.35;
-  float light = clamp(ambient + diff * 0.75, 0.0, 1.2);
+  float diff = max(dot(n, normalize(u_sunDir)), 0.0);
+  float light = clamp(u_ambient + diff * u_sunDiffuse, 0.0, 1.5);
   vec4 tex = texture2D(u_tex, v_uv);
   gl_FragColor = vec4(tex.rgb * light, 1.0);
 }`;
@@ -405,6 +405,9 @@ const a_uv = gl.getAttribLocation(prog, 'a_uv');
 const u_proj = gl.getUniformLocation(prog, 'u_proj');
 const u_view = gl.getUniformLocation(prog, 'u_view');
 const u_texLoc = gl.getUniformLocation(prog, 'u_tex');
+const u_sunDirLoc = gl.getUniformLocation(prog, 'u_sunDir');
+const u_ambientLoc = gl.getUniformLocation(prog, 'u_ambient');
+const u_sunDiffuseLoc = gl.getUniformLocation(prog, 'u_sunDiffuse');
 
 // Texture atlas generation (procedural) with bold borders per tile
 const TILE_SIZE = 64; // px per tile
@@ -498,6 +501,8 @@ uniform float u_pitch;
 uniform float u_fov;
 uniform float u_aspect;
 uniform int u_cloudMode; // 0 none, 1 wispy, 2 both, 3 puffy
+uniform vec3 u_sunDir;   // world-anchored sun direction
+uniform float u_day;     // 0 night .. 1 day
 
 // 2D value noise (kept for possible future use)
 float hash(vec2 p){ return fract(sin(dot(p, vec2(127.1,311.7))) * 43758.5453); }
@@ -570,15 +575,16 @@ void main(){
   // camera->world: worldDir = x*right + y*up + z*(-forward)
   vec3 dir = normalize(dirCam.x*right + dirCam.y*up + dirCam.z*(-fwd));
 
-  // Base sky gradient using elevation
-  vec3 skyTop = vec3(0.38, 0.62, 0.95);
-  vec3 skyBottom = vec3(0.70, 0.88, 1.00);
+  // Base sky gradient day/night blend
   float h = clamp(dir.y*0.5 + 0.5, 0.0, 1.0);
   float t = pow(h, 0.65);
-  vec3 col = mix(skyBottom, skyTop, t);
-
-  // Sun direction (world-anchored) for cloud shading and later disk
-  vec3 sunDir = normalize(vec3(0.6, 0.45, 0.65));
+  vec3 nightTop = vec3(0.02, 0.05, 0.12);
+  vec3 nightBottom = vec3(0.06, 0.08, 0.14);
+  vec3 dayTop = vec3(0.38, 0.62, 0.95);
+  vec3 dayBottom = vec3(0.70, 0.88, 1.00);
+  vec3 topCol = mix(nightTop, dayTop, u_day);
+  vec3 botCol = mix(nightBottom, dayBottom, u_day);
+  vec3 col = mix(botCol, topCol, t);
 
   // Domain-warped FBM clouds (seamless over sphere)
   float speed = 0.010; // slightly faster wispy layer
@@ -606,7 +612,8 @@ void main(){
   float wispyStrength = 0.0;
   if (u_cloudMode == 1)      wispyStrength = 0.45; // wispy only
   else if (u_cloudMode == 2) wispyStrength = 0.28; // both
-  col = mix(col, vec3(1.0), clouds1 * wispyStrength);
+  // Dim wispy clouds at night slightly
+  col = mix(col, vec3(1.0), clouds1 * wispyStrength * mix(0.25, 1.0, u_day));
 
   // Second layer: larger, cartoonish puffy clouds (bright white, crisp edges)
   float speed2 = 0.004; // slower drift for big puffs
@@ -636,17 +643,32 @@ void main(){
   vec3 rimColor  = vec3(0.90, 0.94, 1.0);
   float coreNoRim = max(core - rim*0.95, 0.0);
   // Compose: fill body, then overlay rim for clear edge
-  col = mix(col, bodyColor, coreNoRim * puffyStrength);
-  col = mix(col, rimColor,  rim * min(1.0, puffyStrength + 0.2));
+  float nightDim = mix(0.30, 1.0, u_day);
+  col = mix(col, bodyColor, coreNoRim * puffyStrength * nightDim);
+  col = mix(col, rimColor,  rim * min(1.0, puffyStrength + 0.2) * nightDim);
 
   // Sun: disk + glow using world-anchored direction
-  float cosAng = dot(dir, sunDir);
+  float cosAng = dot(dir, normalize(u_sunDir));
   float ang = acos(clamp(cosAng, -1.0, 1.0));
-  float sun = smoothstep(0.03, 0.02, ang);
-  float glow = smoothstep(0.22, 0.05, ang);
+  float sun = smoothstep(0.03, 0.02, ang) * u_day;
+  float glow = smoothstep(0.22, 0.05, ang) * u_day;
   vec3 sunColor = vec3(1.0, 0.96, 0.85);
   col = mix(col, sunColor, glow*0.35);
   col = mix(col, vec3(1.0), sun);
+
+  // Moon opposite the sun (visible at night)
+  vec3 moonDir = -normalize(u_sunDir);
+  float mang = acos(clamp(dot(dir, moonDir), -1.0, 1.0));
+  float moon = smoothstep(0.035, 0.028, mang) * (1.0 - u_day);
+  float mglow = smoothstep(0.18, 0.07, mang) * (1.0 - u_day);
+  vec3 moonColor = vec3(0.92, 0.96, 1.0);
+  col = mix(col, moonColor, mglow*0.25);
+  col = mix(col, vec3(1.0), moon);
+
+  // Stars: faint speckles at night
+  float starNoise = noise3(dir * 120.0);
+  float stars = step(0.996, starNoise) * (1.0 - u_day);
+  col += vec3(1.0) * stars * 0.20;
 
   gl_FragColor = vec4(col, 1.0);
 }`;
@@ -659,6 +681,8 @@ const sky_u_pitch = gl.getUniformLocation(skyProg, 'u_pitch');
 const sky_u_fov = gl.getUniformLocation(skyProg, 'u_fov');
 const sky_u_aspect = gl.getUniformLocation(skyProg, 'u_aspect');
 const sky_u_cloudMode = gl.getUniformLocation(skyProg, 'u_cloudMode');
+const sky_u_sunDir = gl.getUniformLocation(skyProg, 'u_sunDir');
+const sky_u_day = gl.getUniformLocation(skyProg, 'u_day');
 const skyVBO = gl.createBuffer();
 gl.bindBuffer(gl.ARRAY_BUFFER, skyVBO);
 // full-screen triangle
@@ -1498,10 +1522,13 @@ function lookView(pos, yaw, pitch){
 
 // Game loop
 let last = performance.now();
+let worldTime = 0; // seconds
+const DAY_LENGTH = 240; // seconds per full cycle (4 minutes)
 function frame(now){
   resizeCanvasToDisplaySize();
   const dt = Math.min(0.05, (now-last)/1000); // clamp
   last = now;
+  worldTime += dt;
 
   // Input -> desired velocity aligned to camera yaw
   const speed = (sprint? 7.0 : 4.0);
@@ -1573,6 +1600,23 @@ function frame(now){
   gl.uniform1f(sky_u_fov, fov);
   gl.uniform1f(sky_u_aspect, aspect);
   gl.uniform1i(sky_u_cloudMode, cloudMode);
+  // Compute sun direction and day factor
+  const phase = (worldTime % DAY_LENGTH) / DAY_LENGTH; // 0..1
+  const ang = phase * Math.PI * 2; // 0..2PI
+  const elev = Math.sin(ang);
+  const horiz = Math.cos(ang);
+  const az = [0.6, 0.8];
+  const azLen = Math.hypot(az[0], az[1]);
+  const ax = az[0]/azLen, azz = az[1]/azLen;
+  let sdx = ax * horiz, sdy = elev, sdz = azz * horiz;
+  const sdLen = Math.hypot(sdx, Math.hypot(sdy, sdz)) || 1;
+  sdx/=sdLen; sdy/=sdLen; sdz/=sdLen;
+  // Day factor: >0 when sun above horizon; smooth edges
+  let day = Math.max(0, elev);
+  day = Math.min(1, (day - 0.0) / (1.0 - 0.0));
+  day = Math.pow(day, 0.6); // ease-in brighter midday
+  gl.uniform3f(sky_u_sunDir, sdx, sdy, sdz);
+  gl.uniform1f(sky_u_day, day);
   gl.drawArrays(gl.TRIANGLES, 0, 3);
   gl.depthMask(true);
 
@@ -1599,6 +1643,12 @@ function frame(now){
   const view = lookView(camPos, player.yaw, player.pitch);
   gl.uniformMatrix4fv(u_proj, false, proj);
   gl.uniformMatrix4fv(u_view, false, view);
+  // Dynamic lighting uniforms for world
+  const ambient = 0.08 + 0.27*day; // 0.08..0.35
+  const sunDiff = day;             // 0..1
+  gl.uniform3f(u_sunDirLoc, sdx, sdy, sdz);
+  gl.uniform1f(u_ambientLoc, ambient);
+  gl.uniform1f(u_sunDiffuseLoc, sunDiff);
 
   gl.drawArrays(gl.TRIANGLES, 0, vCount);
 
