@@ -669,7 +669,7 @@ void main(){
   // Stars: faint speckles at night
   float starNoise = noise3(dir * 120.0);
   float stars = step(0.996, starNoise) * (1.0 - u_day);
-  col += vec3(1.0) * stars * 0.20;
+  col += vec3(1.0) * stars * 0.35;
 
   gl_FragColor = vec4(col, 1.0);
 }`;
@@ -1205,6 +1205,8 @@ const keys = new Set();
 let sprint = false;
 // Cloud rendering mode: 0 none, 1 wispy, 2 both, 3 puffy
 let cloudMode = 2;
+// Time mode: 0 auto cycle, 1 force day, 2 force night
+let timeMode = 0;
 window.addEventListener('keydown', (e)=>{
   // If music lab is open, only allow 'G' to close it; ignore other game controls
   if (labEl && !labEl.classList.contains('hidden') && e.code !== 'KeyG') return;
@@ -1234,6 +1236,12 @@ window.addEventListener('keydown', (e)=>{
     e.preventDefault();
     cloudMode = (cloudMode + 1) & 3; // 0..3
     updateCloudsLabel();
+  }
+  if (e.code==='KeyT') { // Toggle time: Auto -> Day -> Night
+    e.preventDefault();
+    timeMode = (timeMode + 1) % 3;
+    const names = ['Auto','Day','Night'];
+    console.log('Time:', names[timeMode]);
   }
   if (e.code==='Comma') { setTrack(currentTrackIndex-1); }
   if (e.code==='Period') { setTrack(currentTrackIndex+1); }
@@ -1602,20 +1610,24 @@ function frame(now){
   gl.uniform1f(sky_u_aspect, aspect);
   gl.uniform1i(sky_u_cloudMode, cloudMode);
   // Compute sun direction and day factor
-  const phase = (worldTime % DAY_LENGTH) / DAY_LENGTH; // 0..1
-  const ang = phase * Math.PI * 2; // 0..2PI
-  const elev = Math.sin(ang);
-  const horiz = Math.cos(ang);
   const az = [0.6, 0.8];
   const azLen = Math.hypot(az[0], az[1]);
   const ax = az[0]/azLen, azz = az[1]/azLen;
-  let sdx = ax * horiz, sdy = elev, sdz = azz * horiz;
+  let sdx, sdy, sdz, day;
+  if (timeMode === 0) {
+    const phase = (worldTime % DAY_LENGTH) / DAY_LENGTH; // 0..1
+    const ang = phase * Math.PI * 2; // 0..2PI
+    const elev = Math.sin(ang);
+    const horiz = Math.cos(ang);
+    sdx = ax * horiz; sdy = elev; sdz = azz * horiz;
+    day = Math.pow(Math.max(0, elev), 0.6);
+  } else if (timeMode === 1) { // force day (midday)
+    sdx = ax; sdy = 0.8; sdz = azz; day = 1.0;
+  } else { // force night (midnight)
+    sdx = ax; sdy = -0.8; sdz = azz; day = 0.0;
+  }
   const sdLen = Math.hypot(sdx, Math.hypot(sdy, sdz)) || 1;
   sdx/=sdLen; sdy/=sdLen; sdz/=sdLen;
-  // Day factor: >0 when sun above horizon; smooth edges
-  let day = Math.max(0, elev);
-  day = Math.min(1, (day - 0.0) / (1.0 - 0.0));
-  day = Math.pow(day, 0.6); // ease-in brighter midday
   gl.uniform3f(sky_u_sunDir, sdx, sdy, sdz);
   gl.uniform1f(sky_u_day, day);
   gl.drawArrays(gl.TRIANGLES, 0, 3);
