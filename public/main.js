@@ -9,6 +9,7 @@ const selectedEl = document.getElementById('selected');
 const cloudsEl = document.getElementById('clouds');
 const musicEl = document.getElementById('music');
 const torchEl = document.getElementById('torch');
+const fxaaEl = document.getElementById('fxaa');
 const fpsEl = document.getElementById('fps');
 const labEl = document.getElementById('musiclab');
 
@@ -386,6 +387,11 @@ uniform vec3 u_torchColor;    // warm torch color
 uniform float u_torchCosInner;// cos(inner cone angle)
 uniform float u_torchCosOuter;// cos(outer cone angle)
 uniform float u_time;         // seconds, for subtle flicker
+// Fog
+uniform vec3 u_camPos;        // camera position for distance
+uniform vec3 u_fogColor;      // fog target color (match sky near horizon)
+uniform float u_fogStart;     // distance where fog begins
+uniform float u_fogEnd;       // distance where fog is full
 void main(){
   vec3 n = normalize(v_norm);
   float diff = max(dot(n, normalize(u_sunDir)), 0.0);
@@ -408,7 +414,14 @@ void main(){
 
   vec3 light = vec3(sun) + (u_torchColor * torchTerm);
   vec4 tex = texture2D(u_tex, v_uv);
-  gl_FragColor = vec4(tex.rgb * clamp(light, 0.0, 2.0), 1.0);
+  vec3 base = tex.rgb * clamp(light, 0.0, 2.0);
+  // Distance fog (smoothstep between start/end)
+  float camDist = distance(u_camPos, v_worldPos);
+  float fog = clamp((camDist - u_fogStart) / max(0.0001, (u_fogEnd - u_fogStart)), 0.0, 1.0);
+  // Delay ramp so near/mid distances remain crisp
+  fog = pow(fog, 1.25);
+  vec3 col = mix(base, u_fogColor, fog);
+  gl_FragColor = vec4(col, 1.0);
 }`;
 
 function makeShader(type, src){
@@ -449,6 +462,10 @@ const u_torchColorLoc = gl.getUniformLocation(prog, 'u_torchColor');
 const u_torchCosInnerLoc = gl.getUniformLocation(prog, 'u_torchCosInner');
 const u_torchCosOuterLoc = gl.getUniformLocation(prog, 'u_torchCosOuter');
 const u_timeWorldLoc = gl.getUniformLocation(prog, 'u_time');
+const u_camPosLoc = gl.getUniformLocation(prog, 'u_camPos');
+const u_fogColorLoc = gl.getUniformLocation(prog, 'u_fogColor');
+const u_fogStartLoc = gl.getUniformLocation(prog, 'u_fogStart');
+const u_fogEndLoc = gl.getUniformLocation(prog, 'u_fogEnd');
 
 // Texture atlas generation (procedural) with bold borders per tile
 const TILE_SIZE = 64; // px per tile
@@ -503,12 +520,22 @@ drawTile(actx, tileIndex.rock, '#808080', '#404040');
 // Upload as GL texture
 const tex = gl.createTexture();
 gl.bindTexture(gl.TEXTURE_2D, tex);
-gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
-gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+// Trilinear mipmapped filtering for stable distance rendering
+gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
 gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
 gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
 gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
 gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, atlasCanvas);
+gl.generateMipmap(gl.TEXTURE_2D);
+// Anisotropic filtering for grazing angles / horizon
+const anisoExt = gl.getExtension('EXT_texture_filter_anisotropic')
+  || gl.getExtension('WEBKIT_EXT_texture_filter_anisotropic')
+  || gl.getExtension('MOZ_EXT_texture_filter_anisotropic');
+if (anisoExt) {
+  const maxAniso = gl.getParameter(anisoExt.MAX_TEXTURE_MAX_ANISOTROPY_EXT) || 8;
+  gl.texParameterf(gl.TEXTURE_2D, anisoExt.TEXTURE_MAX_ANISOTROPY_EXT, Math.min(8, maxAniso));
+}
 
 // Sky pass (full-screen) with gradient, clouds, and sun
 function makeProgram(vsSrc, fsSrc){
@@ -740,6 +767,114 @@ gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([
    3, -1,
   -1,  3,
 ]), gl.STATIC_DRAW);
+
+// --- Post-process (FXAA-like) ---
+const POST_VS = `
+attribute vec2 a_pos;
+varying vec2 v_uv;
+void main(){
+  v_uv = a_pos * 0.5 + 0.5;
+  gl_Position = vec4(a_pos, 0.0, 1.0);
+}`;
+const POST_FS = `
+precision mediump float;
+varying vec2 v_uv;
+uniform sampler2D u_scene;
+uniform vec2 u_invRes;
+
+float luma(vec3 c){ return dot(c, vec3(0.299, 0.587, 0.114)); }
+
+void main(){
+  vec3 rgbM = texture2D(u_scene, v_uv).rgb;
+  float lumaM = luma(rgbM);
+  // Diagonal samples for gradient
+  vec3 rgbNW = texture2D(u_scene, v_uv + vec2(-1.0, -1.0) * u_invRes).rgb;
+  vec3 rgbNE = texture2D(u_scene, v_uv + vec2( 1.0, -1.0) * u_invRes).rgb;
+  vec3 rgbSW = texture2D(u_scene, v_uv + vec2(-1.0,  1.0) * u_invRes).rgb;
+  vec3 rgbSE = texture2D(u_scene, v_uv + vec2( 1.0,  1.0) * u_invRes).rgb;
+  // Cardinal samples for color gradient
+  vec3 rgbN = texture2D(u_scene, v_uv + vec2( 0.0, -1.0) * u_invRes).rgb;
+  vec3 rgbS = texture2D(u_scene, v_uv + vec2( 0.0,  1.0) * u_invRes).rgb;
+  vec3 rgbW = texture2D(u_scene, v_uv + vec2(-1.0,  0.0) * u_invRes).rgb;
+  vec3 rgbE = texture2D(u_scene, v_uv + vec2( 1.0,  0.0) * u_invRes).rgb;
+  float lumaNW = luma(rgbNW);
+  float lumaNE = luma(rgbNE);
+  float lumaSW = luma(rgbSW);
+  float lumaSE = luma(rgbSE);
+  float lumaMin = min(lumaM, min(min(lumaNW, lumaNE), min(lumaSW, lumaSE)));
+  float lumaMax = max(lumaM, max(max(lumaNW, lumaNE), max(lumaSW, lumaSE)));
+
+  // Edge thresholds: use both luma and chroma contrast
+  float lumaThresh = max(0.012, lumaMax * 0.035);
+  float chromaGrad = max(
+    max(length(rgbN - rgbS), length(rgbE - rgbW)),
+    0.5 * max(length(rgbNE - rgbSW), length(rgbNW - rgbSE))
+  );
+  float chromaThresh = 0.08; // catches subtle same-hue edges
+  if ((lumaMax - lumaMin) < lumaThresh && chromaGrad < chromaThresh){
+    gl_FragColor = vec4(rgbM, 1.0);
+    return;
+  }
+
+  // Luma gradient direction
+  vec2 dir;
+  dir.x = -((lumaNW + lumaNE) - (lumaSW + lumaSE));
+  dir.y =  ((lumaNW + lumaSW) - (lumaNE + lumaSE));
+
+  // Reduce step for stability
+  float dirReduce = max((lumaNW + lumaNE + lumaSW + lumaSE) * 0.25 * 0.4, 0.01);
+  float rcpDirMin = 1.0 / (min(abs(dir.x), abs(dir.y)) + dirReduce);
+  dir = clamp(dir * rcpDirMin, vec2(-12.0), vec2(12.0)) * u_invRes;
+
+  // Sample along edge direction (two-tap + fallback)
+  vec3 rgbA = 0.5 * (
+    texture2D(u_scene, v_uv + dir * (1.0/3.0 - 0.5)).rgb +
+    texture2D(u_scene, v_uv + dir * (2.0/3.0 - 0.5)).rgb
+  );
+  vec3 rgbB = rgbA * 0.5 + 0.25 * (
+    texture2D(u_scene, v_uv + dir * -0.5).rgb +
+    texture2D(u_scene, v_uv + dir *  0.5).rgb
+  );
+
+  float lumaB = luma(rgbB);
+  vec3 result = ((lumaB < lumaMin) || (lumaB > lumaMax)) ? rgbA : rgbB;
+  gl_FragColor = vec4(result, 1.0);
+}`;
+const postProg = makeProgram(POST_VS, POST_FS);
+const post_a_pos = gl.getAttribLocation(postProg, 'a_pos');
+const post_u_scene = gl.getUniformLocation(postProg, 'u_scene');
+const post_u_invRes = gl.getUniformLocation(postProg, 'u_invRes');
+
+// Offscreen framebuffer for scene rendering
+let sceneFBO = gl.createFramebuffer();
+let sceneTex = gl.createTexture();
+let sceneDepth = gl.createRenderbuffer();
+let sceneW = 0, sceneH = 0;
+let fxaaEnabled = true; // enabled by default
+
+function allocSceneTarget(w, h){
+  if (sceneW === w && sceneH === h) return;
+  sceneW = w; sceneH = h;
+  gl.bindTexture(gl.TEXTURE_2D, sceneTex);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+
+  gl.bindRenderbuffer(gl.RENDERBUFFER, sceneDepth);
+  gl.renderbufferStorage(gl.RENDERBUFFER, gl.DEPTH_COMPONENT16, w, h);
+
+  gl.bindFramebuffer(gl.FRAMEBUFFER, sceneFBO);
+  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, sceneTex, 0);
+  gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.RENDERBUFFER, sceneDepth);
+  const status = gl.checkFramebufferStatus(gl.FRAMEBUFFER);
+  if (status !== gl.FRAMEBUFFER_COMPLETE){
+    console.warn('FXAA FBO incomplete:', status);
+    fxaaEnabled = false; // fail safe
+  }
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+}
 
 // World generation
 const WORLD_W = 64;
@@ -1290,6 +1425,7 @@ let timeMode = 0;
 // Torch
 let torchEnabled = false;
 function updateTorchLabel(){ if (torchEl) torchEl.textContent = `Torch: ${torchEnabled ? 'On' : 'Off'} (L)`; }
+function updateFxaaLabel(){ if (fxaaEl) fxaaEl.textContent = `AA: ${fxaaEnabled ? 'FXAA' : 'None'} (F)`; }
 window.addEventListener('keydown', (e)=>{
   // If music lab is open, only allow 'G' to close it; ignore other game controls
   if (labEl && !labEl.classList.contains('hidden') && e.code !== 'KeyG') return;
@@ -1319,6 +1455,12 @@ window.addEventListener('keydown', (e)=>{
     e.preventDefault();
     cloudMode = (cloudMode + 1) & 3; // 0..3
     updateCloudsLabel();
+  }
+  if (e.code==='KeyF') { // Toggle FXAA
+    e.preventDefault();
+    fxaaEnabled = !fxaaEnabled;
+    console.log('FXAA:', fxaaEnabled ? 'On' : 'Off');
+    updateFxaaLabel();
   }
   if (e.code==='KeyT') { // Toggle time: Auto -> Day -> Night
     e.preventDefault();
@@ -1402,6 +1544,7 @@ function updateCloudsLabel(){
   }
   updateCloudsLabel();
   updateTorchLabel();
+  updateFxaaLabel();
 
 // Cycle selected block: Q/E and [ ]
 window.addEventListener('keydown', (e)=>{
@@ -1711,12 +1854,22 @@ function frame(now){
 
   if (worldDirty) rebuildWorld();
 
-  // Render
+  if (fxaaEnabled){
+    // Ensure offscreen target matches canvas
+    allocSceneTarget(gl.drawingBufferWidth, gl.drawingBufferHeight);
+    // Render scene into offscreen FBO
+    gl.bindFramebuffer(gl.FRAMEBUFFER, sceneFBO);
+  } else {
+    // Render directly to default framebuffer
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  }
   gl.viewport(0,0,gl.drawingBufferWidth, gl.drawingBufferHeight);
+  gl.depthMask(true);
   gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 
   // Draw sky background
   gl.disable(gl.DEPTH_TEST);
+  gl.disable(gl.CULL_FACE);
   gl.depthMask(false);
   gl.useProgram(skyProg);
   gl.bindBuffer(gl.ARRAY_BUFFER, skyVBO);
@@ -1794,8 +1947,40 @@ function frame(now){
   gl.uniform1f(u_torchCosInnerLoc, Math.cos(inner));
   gl.uniform1f(u_torchCosOuterLoc, Math.cos(outer));
   gl.uniform1f(u_timeWorldLoc, now * 0.001);
+  // Fog uniforms
+  gl.uniform3f(u_camPosLoc, camPos[0], camPos[1], camPos[2]);
+  // Match sky bottom color by day factor
+  const nightBottom = [0.06, 0.08, 0.14];
+  const dayBottom = [0.70, 0.88, 1.00];
+  let fogR = nightBottom[0] * (1-day) + dayBottom[0] * day;
+  let fogG = nightBottom[1] * (1-day) + dayBottom[1] * day;
+  let fogB = nightBottom[2] * (1-day) + dayBottom[2] * day;
+  // Keep fog close to sky color (minimal boost)
+  const fogBoost = 0.06;
+  fogR = fogR*(1-fogBoost) + 1.0*fogBoost;
+  fogG = fogG*(1-fogBoost) + 1.0*fogBoost;
+  fogB = fogB*(1-fogBoost) + 1.0*fogBoost;
+  gl.uniform3f(u_fogColorLoc, fogR, fogG, fogB);
+  gl.uniform1f(u_fogStartLoc, 40.0);
+  gl.uniform1f(u_fogEndLoc, 140.0);
 
   gl.drawArrays(gl.TRIANGLES, 0, vCount);
+
+  if (fxaaEnabled){
+    // Post-process: FXAA on default framebuffer
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.disable(gl.DEPTH_TEST);
+    gl.depthMask(false);
+    gl.useProgram(postProg);
+    gl.bindBuffer(gl.ARRAY_BUFFER, skyVBO);
+    gl.enableVertexAttribArray(post_a_pos);
+    gl.vertexAttribPointer(post_a_pos, 2, gl.FLOAT, false, 0, 0);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, sceneTex);
+    gl.uniform1i(post_u_scene, 0);
+    gl.uniform2f(post_u_invRes, 1.0/gl.drawingBufferWidth, 1.0/gl.drawingBufferHeight);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+  }
 
   requestAnimationFrame(frame);
 }

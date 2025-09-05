@@ -66,6 +66,24 @@ html, body {
   font-size: 12px;
 }
 
+#fxaa {
+  position: absolute;
+  right: 12px; top: 196px;
+  background: rgba(0,0,0,0.4);
+  padding: 8px 10px;
+  border-radius: 6px;
+  font-size: 12px;
+}
+
+#fps {
+  position: absolute;
+  right: 12px; bottom: 12px;
+  background: rgba(0,0,0,0.4);
+  padding: 6px 8px;
+  border-radius: 6px;
+  font-size: 12px;
+}
+
 #crosshair {
   position: absolute;
   left: 50%; top: 50%;
