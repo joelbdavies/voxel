@@ -670,7 +670,10 @@ void main(){
 
   // Stars: increase density (~+50%) and stronger twinkle
   float starVal = noise3(dir * 60.0);
-  float stars = smoothstep(0.978, 0.995, starVal) * (1.0 - u_day);
+  float stars = smoothstep(0.978, 0.995, starVal);
+  // Fade out rapidly after sunrise
+  float dayFade = 1.0 - smoothstep(0.02, 0.12, u_day);
+  stars *= dayFade;
   float tw = 0.75 + 0.35 * sin(u_time * 4.2 + starVal * 60.0);
   stars *= tw;
   col += vec3(1.0) * stars * 1.20;
