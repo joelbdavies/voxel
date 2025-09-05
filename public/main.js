@@ -1201,6 +1201,7 @@ const player = {
 const EYE_HEIGHT = 1.62; // raise camera so we can see below
 let footstepAcc = 0;
 const FOOTSTEP_SPACING = 0.6; // meters between steps
+let moveSaveAcc = 0; // accumulate meters moved before autosaving player
 
 function respawn(){
   const sx = (WORLD_W/2)|0;
@@ -1607,9 +1608,15 @@ function frame(now){
   const moveDist = Math.hypot(dx, dz);
   if (player.onGround && moveDist > 0.001){
     footstepAcc += moveDist;
+    moveSaveAcc += moveDist;
     if (footstepAcc >= FOOTSTEP_SPACING){
       footstepAcc = footstepAcc - FOOTSTEP_SPACING;
       sfxStep();
+    }
+    // Autosave player position every ~2 meters moved
+    if (moveSaveAcc >= 2.0){
+      moveSaveAcc = 0;
+      savePlayer();
     }
   }
 
