@@ -356,8 +356,18 @@ function stopMusic(){
 }
 
 function updateMusicLabel(){
-  const tr = tracks[currentTrackIndex];
-  if (musicEl) musicEl.textContent = `Track ${currentTrackIndex+1}/`+tracks.length+`: ${tr.name} (${tr && tr.bpm ? tr.bpm : DEFAULT_BPM} BPM)`;
+  // Guard against bad index or missing tracks (e.g., after settings load)
+  if (!Array.isArray(tracks) || tracks.length === 0){
+    if (musicEl) musicEl.textContent = 'Music: No tracks';
+    return;
+  }
+  if (typeof currentTrackIndex !== 'number' || currentTrackIndex < 0 || currentTrackIndex >= tracks.length || !tracks[currentTrackIndex]){
+    currentTrackIndex = 0;
+  }
+  const tr = tracks[currentTrackIndex] || {};
+  const bpm = (tr && tr.bpm) ? tr.bpm : DEFAULT_BPM;
+  const name = (tr && tr.name) ? tr.name : 'Track';
+  if (musicEl) musicEl.textContent = `Track ${currentTrackIndex+1}/`+tracks.length+`: ${name} (${bpm} BPM)`;
 }
 
 function setTrack(i){
