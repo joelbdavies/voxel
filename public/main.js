@@ -147,21 +147,6 @@ const tracks = [
     ),
   },
   {
-    name: 'Upbeat Meadow v2', bpm: 128,
-    lead: pattern(
-      [76,,79,,81,,79,, 76,,79,,81,,84,,],
-      [76,,79,,81,,83,, 81,,79,,76,,72,,],
-      [74,,77,,79,,77,, 74,,77,,79,,81,,],
-      [74,,77,,79,,81,, 79,,77,,74,,71,,],
-    ),
-    bass: pattern(
-      [45, , , , 45, , , , 41, , , , 41, , , ,],
-      [43, , , , 43, , , , 47, , , , 47, , , ,],
-      [41, , , , 41, , , , 38, , , , 38, , , ,],
-      [40, , , , 40, , , , 47, , , , 47, , , ,],
-    ),
-  },
-  {
     name: 'Chill Plains', bpm: 100,
     lead: pattern(
       [72,,74,,76,,79,, 76,,74,,72,,69,,],
@@ -877,7 +862,7 @@ window.addEventListener('keydown', (e)=>{
   if (e.code==='Digit4') { setTrack(3); }
   if (e.code==='Digit5') { setTrack(4); }
   if (e.code==='Digit6') { setTrack(5); }
-  if (e.code==='Digit7') { setTrack(6); }
+  // Removed track 7
 });
 window.addEventListener('keyup', (e)=>{
   keys.delete(e.code);
