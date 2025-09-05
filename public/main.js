@@ -760,6 +760,8 @@ function promptLoadWorldCode(){
   try {
     decodeWorldFromCode(str.trim());
     saveWorld();
+    // Ensure player isn't trapped in blocks after load
+    ensurePlayerNotStuck();
     alert('World loaded!');
   } catch (e){
     console.warn(e);
