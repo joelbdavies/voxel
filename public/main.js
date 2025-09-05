@@ -1458,11 +1458,29 @@ function defaultLabState(){
     bpm: 128,
     leadWave: 'square',
     bassWave: 'triangle',
-    lead16: Array(16).fill('.'),
-    bass16: Array(16).fill('.'),
-    hat16: Array(16).fill(0).map((_,i)=> (i%2===1?1:0)),
-    kick16: Array(16).fill(0).map((_,i)=> (i%4===0?1:0)),
+    lead64: Array(64).fill('.'),
+    bass64: Array(64).fill('.'),
+    hat64:  Array(64).fill(0).map((_,i)=> (i%2===1?1:0)),
+    kick64: Array(64).fill(0).map((_,i)=> (i%4===0?1:0)),
   };
+}
+
+function ensureLab64(st){
+  const out = Object.assign({}, st);
+  const rep = (arr16, fillVal)=> repeat16to64(Array.isArray(arr16)?arr16:[], v=> v==null?fillVal:v);
+  if (!Array.isArray(out.lead64) || out.lead64.length!==64){
+    out.lead64 = rep(out.lead16, '.');
+  }
+  if (!Array.isArray(out.bass64) || out.bass64.length!==64){
+    out.bass64 = rep(out.bass16, '.');
+  }
+  if (!Array.isArray(out.hat64) || out.hat64.length!==64){
+    out.hat64 = rep(out.hat16, 0);
+  }
+  if (!Array.isArray(out.kick64) || out.kick64.length!==64){
+    out.kick64 = rep(out.kick16, 0);
+  }
+  return out;
 }
 
 function mtofName(n){
@@ -1508,25 +1526,36 @@ function buildBoolGrid(container, initial){
 }
 
 function getLabUI(){
-  const name = document.getElementById('labName').value || 'Untitled';
-  const bpm = Math.max(60, Math.min(200, parseInt(document.getElementById('labBpm').value,10)||128));
-  const leadWave = document.getElementById('labLeadWave').value;
-  const bassWave = document.getElementById('labBassWave').value;
-  const lead16 = Array.from(document.querySelectorAll('#leadGrid select')).map(s=>s.value);
-  const bass16 = Array.from(document.querySelectorAll('#bassGrid select')).map(s=>s.value);
-  const hat16 = Array.from(document.querySelectorAll('#hatGrid input[type="checkbox"]')).map(cb=>cb.checked?1:0);
-  const kick16 = Array.from(document.querySelectorAll('#kickGrid input[type="checkbox"]')).map(cb=>cb.checked?1:0);
-  return { name,bpm,leadWave,bassWave,lead16,bass16,hat16,kick16 };
+  // labState is the source of truth across 64 steps; sync meta
+  labState.name = document.getElementById('labName').value || labState.name || 'Untitled';
+  labState.bpm = Math.max(60, Math.min(200, parseInt(document.getElementById('labBpm').value,10)||labState.bpm||128));
+  labState.leadWave = document.getElementById('labLeadWave').value || labState.leadWave || 'square';
+  labState.bassWave = document.getElementById('labBassWave').value || labState.bassWave || 'triangle';
+  return labState;
 }
 function setLabUI(st){
   document.getElementById('labName').value = st.name;
   document.getElementById('labBpm').value = st.bpm;
   document.getElementById('labLeadWave').value = st.leadWave;
   document.getElementById('labBassWave').value = st.bassWave;
-  buildGrid(document.getElementById('leadGrid'), st.lead16);
-  buildGrid(document.getElementById('bassGrid'), st.bass16);
-  buildBoolGrid(document.getElementById('hatGrid'), st.hat16);
-  buildBoolGrid(document.getElementById('kickGrid'), st.kick16);
+  renderLabPage();
+}
+
+let labPage = 0; // 0..3
+function renderLabPage(){
+  const pageOff = labPage*16;
+  const title = document.getElementById('labPageLabel');
+  if (title) title.textContent = `Bar ${labPage+1} / 4`;
+  const leadSlice = labState.lead64.slice(pageOff, pageOff+16);
+  const bassSlice = labState.bass64.slice(pageOff, pageOff+16);
+  const hatSlice  = labState.hat64.slice(pageOff, pageOff+16);
+  const kickSlice = labState.kick64.slice(pageOff, pageOff+16);
+  buildGrid(document.getElementById('leadGrid'), leadSlice);
+  buildGrid(document.getElementById('bassGrid'), bassSlice);
+  buildBoolGrid(document.getElementById('hatGrid'), hatSlice);
+  buildBoolGrid(document.getElementById('kickGrid'), kickSlice);
+  // reattach live handlers for the new elements
+  attachLabLiveHandlers();
 }
 
 function loadBank(){
@@ -1568,10 +1597,9 @@ function toggleMusicLab(){
       document.getElementById('labLoad').onclick = ()=>{
         const bank = loadBank();
         const i = parseInt(slotSel.value,10)||0;
-        const st = bank[i] || defaultLabState();
-        setLabUI(st);
-        // apply to live state so preview reflects load immediately
+        const st = ensureLab64(bank[i] || defaultLabState());
         try { labState = JSON.parse(JSON.stringify(st)); } catch { labState = st; }
+        setLabUI(labState);
         refreshLabSlotNames();
       };
       document.getElementById('labStopPreview').onclick = ()=> toggleLabPreviewButton();
@@ -1593,6 +1621,7 @@ function toggleMusicLab(){
         };
       }
     }
+    labState = ensureLab64(labState);
     setLabUI(labState);
     // attach live update handlers
     attachLabLiveHandlers();
@@ -1620,10 +1649,10 @@ function attachLabLiveHandlers(){
   bpmEl.oninput = ()=>{ labState.bpm = Math.max(60, Math.min(200, parseInt(bpmEl.value,10)||128)); };
   leadWaveEl.onchange = ()=>{ labState.leadWave = leadWaveEl.value; };
   bassWaveEl.onchange = ()=>{ labState.bassWave = bassWaveEl.value; };
-  leadGrid.onchange = (e)=>{ if (e.target.tagName==='SELECT'){ const i=+e.target.dataset.idx; labState.lead16[i]=e.target.value; } };
-  bassGrid.onchange = (e)=>{ if (e.target.tagName==='SELECT'){ const i=+e.target.dataset.idx; labState.bass16[i]=e.target.value; } };
-  hatGrid.onchange = (e)=>{ if (e.target.type==='checkbox'){ const i=+e.target.dataset.idx; labState.hat16[i]=e.target.checked?1:0; } };
-  kickGrid.onchange = (e)=>{ if (e.target.type==='checkbox'){ const i=+e.target.dataset.idx; labState.kick16[i]=e.target.checked?1:0; } };
+  leadGrid.onchange = (e)=>{ if (e.target.tagName==='SELECT'){ const i=+e.target.dataset.idx; labState.lead64[labPage*16+i]=e.target.value; } };
+  bassGrid.onchange = (e)=>{ if (e.target.tagName==='SELECT'){ const i=+e.target.dataset.idx; labState.bass64[labPage*16+i]=e.target.value; } };
+  hatGrid.onchange = (e)=>{ if (e.target.type==='checkbox'){ const i=+e.target.dataset.idx; labState.hat64[labPage*16+i]=e.target.checked?1:0; } };
+  kickGrid.onchange = (e)=>{ if (e.target.type==='checkbox'){ const i=+e.target.dataset.idx; labState.kick64[labPage*16+i]=e.target.checked?1:0; } };
 }
 
 function refreshLabSlotNames(){
@@ -1642,6 +1671,12 @@ function refreshLabSlotNames(){
   }
 }
 
+// Hook up bar nav buttons
+const _prevBtn = document.getElementById('labPrevPage');
+const _nextBtn = document.getElementById('labNextPage');
+if (_prevBtn) _prevBtn.onclick = ()=>{ labPage = (labPage+3)%4; renderLabPage(); };
+if (_nextBtn) _nextBtn.onclick = ()=>{ labPage = (labPage+1)%4; renderLabPage(); };
+
 function loadBuiltinToLab(idx){
   const tr = baseTracks[idx];
   if (!tr) return;
@@ -1650,16 +1685,16 @@ function loadBuiltinToLab(idx){
   st.bpm = tr.bpm || DEFAULT_BPM;
   st.leadWave = tr.leadWave || 'square';
   st.bassWave = tr.bassWave || 'triangle';
-  st.lead16 = [];
-  st.bass16 = [];
-  for (let i=0;i<16;i++){
+  st.lead64 = new Array(64);
+  st.bass64 = new Array(64);
+  for (let i=0;i<64;i++){
     const lm = tr.lead && tr.lead[i];
     const bm = tr.bass && tr.bass[i];
-    st.lead16[i] = (lm!=null) ? midiToName(lm) : '.';
-    st.bass16[i] = (bm!=null) ? midiToName(bm) : '.';
+    st.lead64[i] = (lm!=null) ? midiToName(lm) : '.';
+    st.bass64[i] = (bm!=null) ? midiToName(bm) : '.';
   }
-  st.hat16 = tr.hat16 ? tr.hat16.slice(0,16) : defaultLabState().hat16;
-  st.kick16 = tr.kick16 ? tr.kick16.slice(0,16) : defaultLabState().kick16;
+  st.hat64 = tr.hat16 ? repeat16to64(tr.hat16) : defaultLabState().hat64;
+  st.kick64 = tr.kick16 ? repeat16to64(tr.kick16) : defaultLabState().kick64;
   // Apply to UI and state
   setLabUI(st);
   try { labState = JSON.parse(JSON.stringify(st)); } catch { labState = st; }
@@ -1681,8 +1716,8 @@ function rebuildTracksFromBank(){
   for (let i=0;i<bank.length;i++){
     const st = bank[i];
     if (!st) continue;
-    const lead64 = repeat16to64(st.lead16||[], (v)=>{ const m=mtofName(v); return m||null; });
-    const bass64 = repeat16to64(st.bass16||[], (v)=>{ const m=mtofName(v); return m||null; });
+    const lead64 = (st.lead64 && st.lead64.length===64) ? st.lead64.map(v=>{ const m=mtofName(v); return m||null; }) : repeat16to64(st.lead16||[], (v)=>{ const m=mtofName(v); return m||null; });
+    const bass64 = (st.bass64 && st.bass64.length===64) ? st.bass64.map(v=>{ const m=mtofName(v); return m||null; }) : repeat16to64(st.bass16||[], (v)=>{ const m=mtofName(v); return m||null; });
     user.push({
       name: st.name || `Slot ${i+1}`,
       bpm: Math.max(60, Math.min(200, st.bpm||128)),
@@ -1690,8 +1725,8 @@ function rebuildTracksFromBank(){
       bass: bass64,
       leadWave: st.leadWave || 'square',
       bassWave: st.bassWave || 'triangle',
-      hat16: (st.hat16||Array(16).fill(0)),
-      kick16: (st.kick16||Array(16).fill(0)),
+      hat16: (st.hat64 ? st.hat64.slice(0,16) : (st.hat16||Array(16).fill(0))),
+      kick16: (st.kick64 ? st.kick64.slice(0,16) : (st.kick16||Array(16).fill(0))),
     });
   }
   tracks = baseTracks.concat(user);
@@ -1721,7 +1756,7 @@ function scheduleLabStep(time, step){
   const st = labState || defaultLabState();
   const s16 = step%16;
   // lead
-  const l = st.lead16[s16];
+  const l = (st.lead64 && st.lead64[step]) || '.';
   const lm = mtofName(l);
   if (lm){
     const o = audioCtx.createOscillator(); o.type = st.leadWave||'square'; o.frequency.value = mtof(lm);
@@ -1729,7 +1764,7 @@ function scheduleLabStep(time, step){
     o.connect(g).connect(mixMusic()); o.start(time); o.stop(time + (60/(st.bpm||128))/4*0.95);
   }
   // bass
-  const b = st.bass16[s16];
+  const b = (st.bass64 && st.bass64[step]) || '.';
   const bm = mtofName(b);
   if (bm){
     const o = audioCtx.createOscillator(); o.type = st.bassWave||'triangle'; o.frequency.value = mtof(bm);
@@ -1737,7 +1772,7 @@ function scheduleLabStep(time, step){
     o.connect(g).connect(mixMusic()); o.start(time); o.stop(time + (60/(st.bpm||128))/4);
   }
   // drums
-  if (st.hat16[s16]){
+  if ((st.hat64 && st.hat64[step]) || st.hat16 && st.hat16[s16]){
     const t = time;
     const bufferSize = Math.max(1, Math.floor(audioCtx.sampleRate * 0.02));
     const buffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
@@ -1748,7 +1783,7 @@ function scheduleLabStep(time, step){
     const g = audioCtx.createGain(); g.gain.value=0.0001; envGain(g, t, 0.001, 0.01, 0.12, 0.03, 0.02);
     src.connect(hp).connect(g).connect(mixMusic()); src.start(t);
   }
-  if (st.kick16[s16]){
+  if ((st.kick64 && st.kick64[step]) || st.kick16 && st.kick16[s16]){
     const o = audioCtx.createOscillator(); o.type='sine'; const g=audioCtx.createGain(); g.gain.value=0.0001;
     o.frequency.setValueAtTime(110, time); o.frequency.exponentialRampToValueAtTime(48, time+0.12);
     envGain(g, time, 0.001, 0.05, 0.3, 0.06, 0.15); o.connect(g).connect(mixMusic()); o.start(time); o.stop(time+0.18);
