@@ -58,19 +58,19 @@
         <div id="debug" class="hidden"></div>
         <!-- Mobile on-screen controls -->
         <div id="mobileControls" class="hidden">
-          <div class="mc-left">
+          <div id="movePad" class="move-pad">
             <div class="dpad" aria-label="Move">
               <button id="btnUp" class="btn" aria-label="Forward" style="grid-area: up">▲</button>
               <button id="btnLeft" class="btn" aria-label="Left" style="grid-area: left">◀</button>
-              <button id="btnRight" class="btn" aria-label="Right" style="grid-area: right">▶</button>
               <button id="btnDown" class="btn" aria-label="Back" style="grid-area: down">▼</button>
+              <button id="btnRight" class="btn" aria-label="Right" style="grid-area: right">▶</button>
             </div>
             <button id="btnJump" class="btn round" aria-label="Jump">⤴</button>
           </div>
-          <div class="mc-right">
-            <button id="btnRemove" class="btn round" aria-label="Remove Block">−</button>
-            <button id="btnAdd" class="btn round" aria-label="Add Block">＋</button>
-            <button id="btnSwitch" class="btn" aria-label="Switch Block">Switch</button>
+          <div id="actionsLeft" class="actions-left">
+            <button id="btnAdd" class="btn action" aria-label="Add Block">＋</button>
+            <button id="btnRemove" class="btn action" aria-label="Remove Block">−</button>
+            <button id="btnSwitch" class="btn action" aria-label="Switch Block">Block</button>
           </div>
         </div>
       <div id="crosshair">+</div>
