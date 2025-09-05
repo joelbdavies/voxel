@@ -1178,8 +1178,8 @@ function breakBlockOnce(){
 // Bind B to place once
 window.addEventListener('keydown', (e)=>{
   if (e.code==='KeyB') {
-    e.preventDefault();
     if (labEl && !labEl.classList.contains('hidden')) return;
+    e.preventDefault();
     placeSelectedBlockOnce();
   }
 });
@@ -1220,8 +1220,9 @@ function placeBlockUnderPlayer(){
 // Bind V to place underfoot and pop up
 window.addEventListener('keydown', (e)=>{
   if (e.code==='KeyV') {
-    e.preventDefault();
+    // Do not intercept when lab is open so paste (Cmd/Ctrl+V) works in inputs
     if (labEl && !labEl.classList.contains('hidden')) return;
+    e.preventDefault();
     placeBlockUnderPlayer();
   }
 });
@@ -1456,6 +1457,7 @@ let labState = null;
 let labPreviewTimer = null;
 let labNextTime = 0;
 let labStep = 0;
+let labStatusTimer = null;
 
 function defaultLabState(){
   return {
@@ -1486,6 +1488,16 @@ function ensureLab64(st){
     out.kick64 = rep(out.kick16, 0);
   }
   return out;
+}
+
+function setLabStatus(msg){
+  const el = document.getElementById('labStatus');
+  if (!el) return;
+  if (labStatusTimer) { clearTimeout(labStatusTimer); labStatusTimer = null; }
+  el.textContent = msg || '';
+  if (msg){
+    labStatusTimer = setTimeout(()=>{ el.textContent=''; labStatusTimer=null; }, 2000);
+  }
 }
 
 function encodeLabToCode(st){
@@ -1529,25 +1541,30 @@ async function copyLabCode(){
       ta.value = code; document.body.appendChild(ta); ta.select();
       document.execCommand('copy'); document.body.removeChild(ta);
     }
-    alert('Music copied to clipboard.');
+    setLabStatus('Copied to clipboard');
   }catch(e){
     console.warn('Copy failed:', e);
-    alert('Copy failed. See console for JSON.');
+    setLabStatus('Copy failed (see console)');
     console.log(code);
   }
+  // Ensure preview continues
+  startLabPreview();
 }
 
 function promptLoadLabCode(){
   const str = prompt('Paste music JSON:');
-  if (!str) return;
+  if (!str){ setLabStatus('Import cancelled'); startLabPreview(); return; }
   try{
     const st = decodeLabFromCode(str);
     try { labState = JSON.parse(JSON.stringify(st)); } catch { labState = st; }
     setLabUI(labState);
+    setLabStatus('Music loaded');
   }catch(e){
     console.warn(e);
-    alert('Failed to load music: ' + e.message);
+    setLabStatus('Failed to load music');
   }
+  // Resume preview after prompt
+  startLabPreview();
 }
 
 function mtofName(n){
@@ -1741,6 +1758,10 @@ function toggleMusicLab(){
       const btnBuiltin = document.getElementById('labBuiltinLoad');
       const btnExport = document.getElementById('labExport');
       const btnImport = document.getElementById('labImport');
+      const modal = document.getElementById('labModal');
+      const modalText = document.getElementById('labModalText');
+      const modalCancel = document.getElementById('labModalCancel');
+      const modalLoad = document.getElementById('labModalLoad');
       if (builtinSel){
         builtinSel.innerHTML = '';
         for (let i=0;i<baseTracks.length;i++){
@@ -1753,8 +1774,27 @@ function toggleMusicLab(){
           const idx = parseInt(builtinSel.value,10)||0;
           loadBuiltinToLab(idx);
         };
-        if (btnExport) btnExport.onclick = ()=> copyLabCode();
-        if (btnImport) btnImport.onclick = ()=> promptLoadLabCode();
+        if (btnExport) btnExport.onclick = ()=> { copyLabCode(); };
+        if (btnImport) btnImport.onclick = ()=> {
+          if (!modal) return;
+          modal.classList.remove('hidden');
+          modalText.value = '';
+          setLabStatus('');
+          // Keep preview running
+          startLabPreview();
+        };
+        if (modalCancel) modalCancel.onclick = ()=>{ if (modal) modal.classList.add('hidden'); startLabPreview(); };
+        if (modalLoad) modalLoad.onclick = ()=>{
+          try{
+            const st = decodeLabFromCode(modalText.value||'');
+            try { labState = JSON.parse(JSON.stringify(st)); } catch { labState = st; }
+            setLabUI(labState);
+            setLabStatus('Music loaded');
+          }catch(e){ console.warn(e); setLabStatus('Failed to load music'); }
+          if (modal) modal.classList.add('hidden');
+          stopLabPreview();
+          startLabPreview();
+        };
       }
     }
     labState = ensureLab64(labState);
@@ -1887,7 +1927,9 @@ function rebuildTracksFromBank(){
 }
 
 function startLabPreview(){
-  if (!audioCtx) initAudio();
+  // Ensure audio context is alive and resumed (alerts/prompts can suspend it)
+  initAudio();
+  resumeAudio();
   if (labPreviewTimer) return; // already running
   labNextTime = audioCtx.currentTime + 0.05;
   // do not reset labStep to preserve groove while editing
@@ -1962,5 +2004,8 @@ function toggleLabPreviewButton(){
 rebuildTracksFromBank();
 updateMusicLabel();
 
-// Basic safety: prevent context menu on RMB
-window.addEventListener('contextmenu', (e)=>e.preventDefault());
+// Allow context menu inside Music Lab (for paste), block elsewhere
+window.addEventListener('contextmenu', (e)=>{
+  if (labEl && labEl.contains(e.target)) return; // allow in lab UI
+  e.preventDefault();
+});

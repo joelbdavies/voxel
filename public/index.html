@@ -95,9 +95,20 @@
             <select id="labBuiltin"></select>
           </label>
           <button id="labBuiltinLoad" class="btn">Load Built-in</button>
-          <span style="flex:1"></span>
+          <span id="labStatus" style="flex:1; opacity:.85"></span>
           <button id="labExport" class="btn">Export</button>
           <button id="labImport" class="btn">Import</button>
+        </div>
+        <div id="labModal" class="lab-modal hidden">
+          <div class="modal-content">
+            <div class="label">Paste Music JSON</div>
+            <textarea id="labModalText"></textarea>
+            <div class="row" style="margin-top:8px">
+              <button id="labModalCancel" class="btn">Cancel</button>
+              <span style="flex:1"></span>
+              <button id="labModalLoad" class="btn primary">Load</button>
+            </div>
+          </div>
         </div>
       </div>
     </div>
