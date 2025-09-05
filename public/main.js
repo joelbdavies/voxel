@@ -9,7 +9,7 @@ const selectedEl = document.getElementById('selected');
 const cloudsEl = document.getElementById('clouds');
 const musicEl = document.getElementById('music');
 const torchEl = document.getElementById('torch');
-const fpsEl = document.getElementById('fps');
+const debugEl = document.getElementById('debug');
 const labEl = document.getElementById('musiclab');
 
 // --- Audio (8-bit SFX + music) ---
@@ -430,6 +430,13 @@ uniform vec3 u_camPos;        // camera position for distance
 uniform vec3 u_fogColor;      // fog target color (match sky near horizon)
 uniform float u_fogStart;     // distance where fog begins
 uniform float u_fogEnd;       // distance where fog is full
+// Emissive lamps (placed blocks)
+const int MAX_LAMPS = 32;
+uniform int u_lampCount;
+uniform vec3 u_lampPos[MAX_LAMPS];
+uniform float u_lampRadius;       // meters
+uniform float u_lampIntensity;    // scalar
+uniform vec3 u_lampColor;
 void main(){
   vec3 n = normalize(v_norm);
   float diff = max(dot(n, normalize(u_sunDir)), 0.0);
@@ -450,7 +457,23 @@ void main(){
   flicker = clamp(flicker, 0.85, 1.15);
   float torchTerm = u_torchOn * u_torchIntensity * ndotl * atten * spot * flicker;
 
-  vec3 light = vec3(sun) + (u_torchColor * torchTerm);
+  // Emissive lamps: radial falloff; near the lamp, add isotropic glow so lamp blocks self‑illuminate
+  float lampAccum = 0.0;
+  for (int i=0; i<MAX_LAMPS; i++){
+    if (i >= u_lampCount) break;
+    vec3 L2 = v_worldPos - u_lampPos[i];
+    float d2 = length(L2);
+    float atten2 = 1.0 - smoothstep(u_lampRadius * 0.4, u_lampRadius, d2);
+    atten2 = pow(max(0.0, atten2), 1.1);
+    float ndotl2 = max(dot(n, normalize(-L2)), 0.0);
+    // Near the lamp center, blend toward isotropic emission so the lamp surface glows
+    float near = 1.0 - smoothstep(0.0, u_lampRadius * 0.3, d2);
+    float contrib = atten2 * mix(ndotl2, 1.0, near);
+    lampAccum += contrib;
+  }
+  lampAccum = clamp(lampAccum * u_lampIntensity, 0.0, 4.0);
+
+  vec3 light = vec3(sun) + (u_torchColor * torchTerm) + (u_lampColor * lampAccum);
   vec4 tex = texture2D(u_tex, v_uv);
   vec3 base = tex.rgb * clamp(light, 0.0, 2.0);
   // Distance fog (smoothstep between start/end)
@@ -504,6 +527,83 @@ const u_camPosLoc = gl.getUniformLocation(prog, 'u_camPos');
 const u_fogColorLoc = gl.getUniformLocation(prog, 'u_fogColor');
 const u_fogStartLoc = gl.getUniformLocation(prog, 'u_fogStart');
 const u_fogEndLoc = gl.getUniformLocation(prog, 'u_fogEnd');
+// Lamps
+const u_lampCountLoc = gl.getUniformLocation(prog, 'u_lampCount');
+const u_lampPosLoc = new Array(32).fill(0).map((_,i)=> gl.getUniformLocation(prog, `u_lampPos[${i}]`));
+const u_lampRadiusLoc = gl.getUniformLocation(prog, 'u_lampRadius');
+const u_lampIntensityLoc = gl.getUniformLocation(prog, 'u_lampIntensity');
+const u_lampColorLoc = gl.getUniformLocation(prog, 'u_lampColor');
+
+// --- Overlay programs (outline + ghost) ---
+const OVERLAY_VS = `
+attribute vec3 a_pos;
+uniform mat4 u_proj;
+uniform mat4 u_view;
+uniform vec3 u_offset;
+uniform float u_expand; // scale around cube center
+void main(){
+  vec3 c = vec3(0.5);
+  vec3 p = (a_pos - c) * (1.0 + u_expand) + c + u_offset;
+  gl_Position = u_proj * u_view * vec4(p, 1.0);
+}`;
+const OVERLAY_FS = `
+precision mediump float;
+uniform vec4 u_color;
+void main(){ gl_FragColor = u_color; }
+`;
+const overlayProg = makeProgram(OVERLAY_VS, OVERLAY_FS);
+const ov_a_pos = gl.getAttribLocation(overlayProg, 'a_pos');
+const ov_u_proj = gl.getUniformLocation(overlayProg, 'u_proj');
+const ov_u_view = gl.getUniformLocation(overlayProg, 'u_view');
+const ov_u_offset = gl.getUniformLocation(overlayProg, 'u_offset');
+const ov_u_expand = gl.getUniformLocation(overlayProg, 'u_expand');
+const ov_u_color = gl.getUniformLocation(overlayProg, 'u_color');
+
+// Unit cube line list (12 edges -> 24 vertices)
+const outlineVBO = gl.createBuffer();
+gl.bindBuffer(gl.ARRAY_BUFFER, outlineVBO);
+(function(){
+  const v = [];
+  const P = [
+    [0,0,0],[1,0,0],[1,0,1],[0,0,1], // bottom ring
+    [0,1,0],[1,1,0],[1,1,1],[0,1,1], // top ring
+  ];
+  const addEdge = (a,b)=>{ v.push(P[a][0],P[a][1],P[a][2], P[b][0],P[b][1],P[b][2]); };
+  // bottom edges
+  addEdge(0,1); addEdge(1,2); addEdge(2,3); addEdge(3,0);
+  // top edges
+  addEdge(4,5); addEdge(5,6); addEdge(6,7); addEdge(7,4);
+  // verticals
+  addEdge(0,4); addEdge(1,5); addEdge(2,6); addEdge(3,7);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(v), gl.STATIC_DRAW);
+})();
+
+// Unit cube faces (12 triangles)
+const ghostVBO = gl.createBuffer();
+gl.bindBuffer(gl.ARRAY_BUFFER, ghostVBO);
+(function(){
+  const q = (x0,y0,z0,x1,y1,z1,x2,y2,z2,x3,y3,z3)=>[
+    x0,y0,z0, x1,y1,z1, x2,y2,z2,
+    x0,y0,z0, x2,y2,z2, x3,y3,z3
+  ];
+  const verts = [].concat(
+    // -Z
+    q(0,0,0, 1,0,0, 1,1,0, 0,1,0),
+    // +Z
+    q(0,0,1, 0,1,1, 1,1,1, 1,0,1),
+    // -X
+    q(0,0,0, 0,1,0, 0,1,1, 0,0,1),
+    // +X
+    q(1,0,0, 1,0,1, 1,1,1, 1,1,0),
+    // -Y
+    q(0,0,0, 0,0,1, 1,0,1, 1,0,0),
+    // +Y
+    q(0,1,0, 1,1,0, 1,1,1, 0,1,1)
+  );
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(verts), gl.STATIC_DRAW);
+})();
+
+let debugVisible = false;
 
 // Texture atlas generation (procedural) with bold borders per tile
 const TILE_SIZE = 64; // px per tile
@@ -518,6 +618,9 @@ const tileIndex = {
   sand: 4,
   water: 5,
   rock: 6,
+  wood: 7,
+  leaf: 8,
+  lamp: 9,
 };
 
 function drawTile(ctx, idx, color, borderColor){
@@ -554,6 +657,10 @@ drawTile(actx, tileIndex.stone, '#9aa0a6', '#50565c');
 drawTile(actx, tileIndex.sand, '#e5d38c', '#8c7d3a');
 drawTile(actx, tileIndex.water, '#3fa7ff', '#135a8f');
 drawTile(actx, tileIndex.rock, '#808080', '#404040');
+drawTile(actx, tileIndex.wood, '#9b6b3d', '#5a3a1c');
+// Make leaves noticeably darker than grass for clear contrast
+drawTile(actx, tileIndex.leaf, '#2a5e1f', '#0e2a09');
+drawTile(actx, tileIndex.lamp, '#f2e48a', '#a07f2a');
 
 // Upload as GL texture
 const tex = gl.createTexture();
@@ -1368,7 +1475,7 @@ if (!loadWorld()){
 }
 
 // Block type -> tile per face
-// ids: 0=air,1=grass,3=dirt,4=stone,5=water,6=sand,7=rock
+// ids: 0=air,1=grass,3=dirt,4=stone,5=water,6=sand,7=rock, 8=wood, 9=leaf, 10=lamp
 const BLOCK = {
   AIR: 0,
   GRASS: 1,
@@ -1377,6 +1484,9 @@ const BLOCK = {
   WATER: 5,
   SAND: 6,
   ROCK: 7,
+  WOOD: 8,
+  LEAF: 9,
+  LAMP: 10,
 };
 
 const BLOCK_TILES = {
@@ -1386,6 +1496,9 @@ const BLOCK_TILES = {
   [BLOCK.WATER]: { top: tileIndex.water, side: tileIndex.water, bottom: tileIndex.water },
   [BLOCK.SAND]:  { top: tileIndex.sand, side: tileIndex.sand, bottom: tileIndex.sand },
   [BLOCK.ROCK]:  { top: tileIndex.rock, side: tileIndex.rock, bottom: tileIndex.rock },
+  [BLOCK.WOOD]:  { top: tileIndex.wood, side: tileIndex.wood, bottom: tileIndex.wood },
+  [BLOCK.LEAF]:  { top: tileIndex.leaf, side: tileIndex.leaf, bottom: tileIndex.leaf },
+  [BLOCK.LAMP]:  { top: tileIndex.lamp, side: tileIndex.lamp, bottom: tileIndex.lamp },
 };
 
 function inBounds(x,y,z){
@@ -1565,6 +1678,11 @@ updateMusicLabel();
 // If flight was persisted, ensure consistent state
 if (flyMode) { try { player.onGround = false; player.vel[1] = 0; } catch(e){} }
 window.addEventListener('keydown', (e)=>{
+  if (e.code==='F3') {
+    e.preventDefault();
+    debugVisible = !debugVisible;
+    if (debugEl) debugEl.classList.toggle('hidden', !debugVisible);
+  }
   // If music lab is open, only allow 'G' to close it; ignore other game controls
   if (labEl && !labEl.classList.contains('hidden') && e.code !== 'KeyG') return;
   keys.add(e.code);
@@ -1675,18 +1793,22 @@ function onMouseMove(e){
 }
 
 // Block selection and actions
-const placeOptions = [BLOCK.GRASS, BLOCK.DIRT, BLOCK.STONE, BLOCK.SAND, BLOCK.ROCK, BLOCK.WATER];
+const placeOptions = [
+  { type:'block', id: BLOCK.GRASS, name:'Grass' },
+  { type:'block', id: BLOCK.DIRT,  name:'Dirt' },
+  { type:'block', id: BLOCK.STONE, name:'Stone' },
+  { type:'block', id: BLOCK.SAND,  name:'Sand' },
+  { type:'block', id: BLOCK.ROCK,  name:'Rock' },
+  { type:'block', id: BLOCK.WATER, name:'Water' },
+  { type:'block', id: BLOCK.WOOD,  name:'Wood' },
+  { type:'block', id: BLOCK.LEAF,  name:'Leaf' },
+  { type:'block', id: BLOCK.LAMP,  name:'Lamp' },
+  { type:'tree',               name:'Tree' },
+];
 let selectedIndex = 0;
 function updateSelectedLabel(){
-  const names = {
-    [BLOCK.GRASS]: 'Grass',
-    [BLOCK.DIRT]: 'Dirt',
-    [BLOCK.STONE]: 'Stone',
-    [BLOCK.SAND]: 'Sand',
-    [BLOCK.ROCK]: 'Rock',
-    [BLOCK.WATER]: 'Water',
-  };
-  selectedEl.textContent = `Selected: ${names[placeOptions[selectedIndex]]}`;
+  const opt = placeOptions[selectedIndex];
+  selectedEl.textContent = `Selected: ${opt.name}`;
 }
 updateSelectedLabel();
 // Apply any loaded selection from storage now that variables exist
@@ -1715,6 +1837,20 @@ window.addEventListener('keydown', (e)=>{
   }
 });
 
+function doPlaceAt(x,y,z, hit){
+  const opt = placeOptions[selectedIndex];
+  if (opt.type === 'block'){
+    if (getBlock(x,y,z)===BLOCK.AIR){ setBlock(x,y,z, opt.id); sfxPlace(); }
+    return true;
+  }
+  if (opt.type === 'tree'){
+    placeTreeAt(x,y,z);
+    sfxPlace();
+    return true;
+  }
+  return false;
+}
+
 function placeSelectedBlockOnce(){
   const yaw = player.yaw;
   const camPos = [player.pos[0], player.pos[1] + EYE_HEIGHT, player.pos[2]];
@@ -1725,7 +1861,6 @@ function placeSelectedBlockOnce(){
   ];
   const hit = raycast(camPos, lookDir, 6.0);
   if (hit){
-    const placeId = placeOptions[selectedIndex];
     const tx = hit.x + hit.face[0];
     const ty = hit.y + hit.face[1];
     const tz = hit.z + hit.face[2];
@@ -1735,7 +1870,7 @@ function placeSelectedBlockOnce(){
                       ty+1 > py && ty < py+PLAYER_H &&
                       tz+1 > pz-PLAYER_D/2 && tz < pz+PLAYER_D/2);
       if (!inside) {
-        setBlock(tx,ty,tz, placeId); sfxPlace();
+        doPlaceAt(tx,ty,tz, hit);
       } else {
         // Special case: allow placing on the block we're standing on when pointing at its top
         const bx = Math.floor(px);
@@ -1746,12 +1881,11 @@ function placeSelectedBlockOnce(){
         if (isTopFace && placingAtFeetCell){
           const newY = ty + 1 + 1e-3; // stand on top of the placed block
           if (!aabbIntersectsBlock(px, newY, pz)){
-            setBlock(tx,ty,tz, placeId);
+            doPlaceAt(tx,ty,tz, hit);
             player.pos[1] = newY;
             player.vel[1] = 0;
             player.onGround = true;
             savePlayer();
-            sfxPlace();
           }
         }
       }
@@ -1792,6 +1926,66 @@ window.addEventListener('keydown', (e)=>{
   }
 });
 
+function canPlaceAtFromHit(hit){
+  if (!hit) return null;
+  const tx = hit.x + hit.face[0];
+  const ty = hit.y + hit.face[1];
+  const tz = hit.z + hit.face[2];
+  if (!inBounds(tx,ty,tz) || getBlock(tx,ty,tz) !== BLOCK.AIR) return null;
+  // Disallow if intersects player AABB, except allow top-face stand-on placement when safe
+  const px = player.pos[0], py = player.pos[1], pz = player.pos[2];
+  const inside = (tx+1 > px-PLAYER_W/2 && tx < px+PLAYER_W/2 &&
+                  ty+1 > py && ty < py+PLAYER_H &&
+                  tz+1 > pz-PLAYER_D/2 && tz < pz+PLAYER_D/2);
+  if (!inside) return { x: tx, y: ty, z: tz };
+  // Allow placing on top of the block we're standing on when pointing at its top, if we can stand after
+  const bx = Math.floor(px);
+  const by = Math.floor(py);
+  const bz = Math.floor(pz);
+  const isTopFace = (hit.face[0]===0 && hit.face[1]===1 && hit.face[2]===0);
+  const placingAtFeetCell = (tx===bx && ty===by && tz===bz);
+  if (isTopFace && placingAtFeetCell){
+    const newY = ty + 1 + 1e-3;
+    if (!aabbIntersectsBlock(px, newY, pz)){
+      return { x: tx, y: ty, z: tz };
+    }
+  }
+  return null;
+}
+
+// Tree generator (small trunk + leaves blob)
+function placeTreeAt(x,y,z){
+  // Trunk
+  const h = 5 + (Math.random()<0.5?0:1); // 5–6 blocks tall
+  for (let i=0;i<h;i++){
+    if (inBounds(x,y+i,z)) setBlock(x,y+i,z, BLOCK.WOOD);
+  }
+  const topY = y + h - 1;
+  // Canopy: 4 layers centered near the top with shrinking radius toward bottom
+  // dy from -2..+1 relative to top; radii pattern similar to a simple oak
+  for (let dy=-2; dy<=1; dy++){
+    const ly = topY + dy;
+    if (ly < y + 2) continue; // avoid very low leaves near ground
+    let radius = 0;
+    if (dy === 1) radius = 1;        // small cap
+    else if (dy === 0) radius = 2;   // widest ring
+    else if (dy === -1) radius = 2;  // mid ring
+    else if (dy === -2) radius = 1;  // small lower ring
+    for (let dz=-radius; dz<=radius; dz++){
+      for (let dx=-radius; dx<=radius; dx++){
+        // Round-ish shape per layer
+        if ((dx*dx + dz*dz) > (radius*radius + 0.25)) continue;
+        // Avoid filling the trunk shaft below the top
+        if (dx===0 && dz===0 && dy<=0) continue;
+        const lx = x+dx, lz = z+dz;
+        if (!inBounds(lx,ly,lz)) continue;
+        if (getBlock(lx,ly,lz) !== BLOCK.AIR) continue;
+        setBlock(lx,ly,lz, BLOCK.LEAF);
+      }
+    }
+  }
+}
+
 function placeBlockUnderPlayer(){
   const px = player.pos[0], py = player.pos[1], pz = player.pos[2];
   const bx = Math.floor(px);
@@ -1806,7 +2000,9 @@ function placeBlockUnderPlayer(){
   const newY = ty + 1 + 1e-3;
   // Only place if we can stand there without intersecting
   if (!aabbIntersectsBlock(px, newY, pz)){
-    setBlock(bx, ty, bz, placeOptions[selectedIndex]);
+    const opt = placeOptions[selectedIndex];
+    if (opt.type !== 'block') return false;
+    setBlock(bx, ty, bz, opt.id);
     // Snap player on top
     player.pos[1] = newY;
     player.vel[1] = 0;
@@ -1962,6 +2158,7 @@ function randNormal(mean, std){
 let fpsAccumTime = 0;
 let fpsAccumFrames = 0;
 let fpsLast = 0;
+let lastDayFactor = 1.0;
 function frame(now){
   resizeCanvasToDisplaySize();
   const dt = Math.min(0.05, (now-last)/1000); // clamp
@@ -1990,7 +2187,6 @@ function frame(now){
   fpsAccumFrames += 1;
   if (fpsAccumTime >= 1.0){
     fpsLast = Math.round(fpsAccumFrames / fpsAccumTime);
-    if (fpsEl) fpsEl.textContent = `FPS: ${fpsLast}`;
     fpsAccumTime = 0;
     fpsAccumFrames = 0;
   }
@@ -2055,6 +2251,23 @@ function frame(now){
     -Math.cos(yaw)*Math.cos(player.pitch)
   ];
   const hit = raycast(camPos, lookDir, 6.0);
+  // Gather nearby lamp positions for emissive lighting
+  const lampPos = [];
+  const maxLamp = 32;
+  const radLamp = 64; // activation radius for collecting lamps
+  const cx = Math.floor(player.pos[0]);
+  const cy = Math.floor(player.pos[1]);
+  const cz = Math.floor(player.pos[2]);
+  const y0 = Math.max(0, cy - radLamp), y1 = Math.min(WORLD_H-1, cy + radLamp);
+  const z0 = Math.max(0, cz - radLamp), z1 = Math.min(WORLD_D-1, cz + radLamp);
+  const x0 = Math.max(0, cx - radLamp), x1 = Math.min(WORLD_W-1, cx + radLamp);
+  for (let yy=y0; yy<=y1 && lampPos.length<maxLamp; yy++){
+    for (let zz=z0; zz<=z1 && lampPos.length<maxLamp; zz++){
+      for (let xx=x0; xx<=x1 && lampPos.length<maxLamp; xx++){
+        if (getBlock(xx,yy,zz) === BLOCK.LAMP){ lampPos.push([xx+0.5, yy+0.5, zz+0.5]); }
+      }
+    }
+  }
 
   if (worldDirty) rebuildWorld();
 
@@ -2118,6 +2331,7 @@ function frame(now){
   sdx/=sdLen; sdy/=sdLen; sdz/=sdLen;
   gl.uniform3f(sky_u_sunDir, sdx, sdy, sdz);
   gl.uniform1f(sky_u_day, day);
+  lastDayFactor = day;
   gl.drawArrays(gl.TRIANGLES, 0, 3);
   gl.depthMask(true);
 
@@ -2161,6 +2375,15 @@ function frame(now){
   gl.uniform1f(u_torchCosInnerLoc, Math.cos(inner));
   gl.uniform1f(u_torchCosOuterLoc, Math.cos(outer));
   gl.uniform1f(u_timeWorldLoc, now * 0.001);
+  // Lamp uniforms
+  gl.uniform1i(u_lampCountLoc, lampPos.length);
+  for (let i=0;i<32;i++){
+    const p = lampPos[i] || [0,0,0];
+    gl.uniform3f(u_lampPosLoc[i], p[0], p[1], p[2]);
+  }
+  gl.uniform1f(u_lampRadiusLoc, 10.0);
+  gl.uniform1f(u_lampIntensityLoc, 1.3);
+  gl.uniform3f(u_lampColorLoc, 1.0, 0.9, 0.65);
   // Fog uniforms
   gl.uniform3f(u_camPosLoc, camPos[0], camPos[1], camPos[2]);
   // Match sky bottom color by day factor
@@ -2179,6 +2402,37 @@ function frame(now){
   gl.uniform1f(u_fogEndLoc, 140.0);
 
   gl.drawArrays(gl.TRIANGLES, 0, vCount);
+
+  // Block targeting overlays (draw into scene before post-process)
+  if (hit){
+    gl.useProgram(overlayProg);
+    gl.uniformMatrix4fv(ov_u_proj, false, proj);
+    gl.uniformMatrix4fv(ov_u_view, false, view);
+    // Outline
+    gl.bindBuffer(gl.ARRAY_BUFFER, outlineVBO);
+    gl.enableVertexAttribArray(ov_a_pos);
+    gl.vertexAttribPointer(ov_a_pos, 3, gl.FLOAT, false, 0, 0);
+    gl.disable(gl.CULL_FACE);
+    gl.uniform3f(ov_u_offset, hit.x, hit.y, hit.z);
+    gl.uniform1f(ov_u_expand, 0.02);
+    gl.uniform4f(ov_u_color, 1.0, 1.0, 1.0, 0.85);
+    gl.drawArrays(gl.LINES, 0, 24);
+    // Placement ghost (if valid)
+    const cand = canPlaceAtFromHit(hit);
+    if (cand){
+      gl.enable(gl.BLEND);
+      gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+      gl.bindBuffer(gl.ARRAY_BUFFER, ghostVBO);
+      gl.enableVertexAttribArray(ov_a_pos);
+      gl.vertexAttribPointer(ov_a_pos, 3, gl.FLOAT, false, 0, 0);
+      gl.disable(gl.CULL_FACE);
+      gl.uniform3f(ov_u_offset, cand.x, cand.y, cand.z);
+      gl.uniform1f(ov_u_expand, 0.0);
+      gl.uniform4f(ov_u_color, 1.0, 1.0, 1.0, 0.25);
+      gl.drawArrays(gl.TRIANGLES, 0, 36);
+      gl.disable(gl.BLEND);
+    }
+  }
 
   if (fxaaEnabled){
     // Post-process: FXAA on default framebuffer
@@ -2214,6 +2468,28 @@ function frame(now){
     gl.uniform1f(rain_u_yaw, player.yaw);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
     gl.disable(gl.BLEND);
+  }
+
+  // Debug overlay update (F3)
+  if (debugVisible && debugEl){
+    const toFixed = (v)=> (Math.round(v*100)/100).toFixed(2);
+    const rad2deg = (r)=> (r*180/Math.PI);
+    const yawDeg = ((rad2deg(player.yaw)%360)+360)%360;
+    const pitchDeg = rad2deg(player.pitch);
+    const phase = (worldTime % DAY_LENGTH) / DAY_LENGTH;
+    const minutes = Math.floor(phase * 24 * 60);
+    const hh = String(Math.floor(minutes/60)).padStart(2,'0');
+    const mm = String(minutes%60).padStart(2,'0');
+    const tNames = ['Auto','Day','Night'];
+    const lines = [
+      `FPS: ${fpsLast}`,
+      `Pos: ${toFixed(player.pos[0])}, ${toFixed(player.pos[1])}, ${toFixed(player.pos[2])}`,
+      `Yaw/Pitch: ${toFixed(yawDeg)}°, ${toFixed(pitchDeg)}°`,
+      `Ground: ${player.onGround ? 'Yes' : 'No'}  Fly: ${flyMode ? 'Yes' : 'No'}`,
+      `Weather: ${rainActive ? `Rain (${Math.max(0, rainTimeLeft).toFixed(1)}s)` : 'Clear'}`,
+      `Time: ${hh}:${mm}  Mode: ${tNames[timeMode]}  DayFactor: ${toFixed(lastDayFactor)}`,
+    ];
+    debugEl.textContent = lines.join('\n');
   }
 
   requestAnimationFrame(frame);

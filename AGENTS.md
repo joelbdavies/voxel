@@ -4,12 +4,13 @@
 Voxel Craft is a lightweight, browser‑based voxel sandbox rendered with WebGL. It features first‑person movement (WASD + mouse look), AABB collisions, block raycast place/break, and a stylized sky with environment‑locked sun and two cloud layers. A simple Music Lab provides chiptune‑style playback and track switching while you explore.
 
 ## Current Features
-- Movement & Physics: Walk, sprint, jump; collision and gravity with smooth stepping.
-- Blocks & World: Small voxel world, face‑culled mesh, atlas‑textured tiles; place/break via raycast.
-- Sky & Lighting: Gradient sky, world‑anchored sun disk/glow, correct camera rotation.
-- Clouds: Two layers — wispy FBM and cartoon puffy — horizon fade; toggle with `K` (None/Wispy/Both/Puffy).
-- HUD: Crosshair, selected block label, music label, cloud mode label.
-- Audio: Toggle music (`M`), choose tracks (`,`, `.`, `1–6`).
+- Movement & Physics: Walk, sprint, jump; collision and gravity with smooth stepping; fly mode (double Space to start, Space/Ctrl to move up/down, double Ctrl to exit).
+- Blocks & World: Small voxel world, face‑culled mesh, atlas‑textured tiles; place/break via raycast; safe under‑foot placement; prevent placing inside player; export/import world via copy/paste code.
+- Persistence: Auto‑save world, player (pos/yaw/pitch/selection), time‑of‑day phase, and settings (clouds, time mode, torch, FXAA, music, track, fly) to `localStorage`.
+- Rendering & Post: Gradient sky with environment‑locked sun and two cloud layers; day/night cycle with Auto/Day/Night toggle; trilinear mipmaps + anisotropic filtering; FXAA‑like post‑process; distance fog tuned to sky.
+- Lighting & Weather: Camera‑anchored torch spotlight with flicker and warm color; periodic rain effect (screen‑space overlay) with matching ambient rain SFX.
+- HUD & UI: Crosshair, selected block label, music label, cloud mode label, torch label, FPS counter; clear pointer‑lock instructions.
+- Audio & Music Lab: Chiptune playback with multiple tracks and track switching; Music Lab with 16 slots, live preview, simple piano‑roll (lead/bass) and hat/kick grids, import/export JSON.
 
 ## Project Structure & Module Organization
 - `public/`: Browser code and assets
@@ -23,7 +24,7 @@ Voxel Craft is a lightweight, browser‑based voxel sandbox rendered with WebGL.
 ## Build, Test, and Development Commands
 - `npm run dev` (or `npm start`): Start dev server on `http://localhost:5173`.
 - `npm run build:single`: Produce `dist/voxelcraft-single.html` for easy sharing.
-- Manual test: Open the dev URL, verify movement (WASD, Space, Shift), block place/break (B/C/V), music controls (M, ,/. , 1–6), and cloud modes (K).
+- Manual test: Open the dev URL, verify movement (WASD, Space, Shift), fly mode (double Space to start, double Ctrl to exit), block place/break (B/C), block cycling ([/], Q/E), music controls (M, ,/. , 1–6), cloud modes (K), time toggle (T), torch (F), world export/import (P/O), rain appears occasionally, and FPS is stable.
 
 ## Coding Style & Naming Conventions
 - JavaScript: ES modules on server; browser code is plain JS.
