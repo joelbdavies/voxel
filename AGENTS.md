@@ -1,5 +1,16 @@
 # Repository Guidelines
 
+## Game Overview
+Voxel Craft is a lightweight, browser‑based voxel sandbox rendered with WebGL. It features first‑person movement (WASD + mouse look), AABB collisions, block raycast place/break, and a stylized sky with environment‑locked sun and two cloud layers. A simple Music Lab provides chiptune‑style playback and track switching while you explore.
+
+## Current Features
+- Movement & Physics: Walk, sprint, jump; collision and gravity with smooth stepping.
+- Blocks & World: Small voxel world, face‑culled mesh, atlas‑textured tiles; place/break via raycast.
+- Sky & Lighting: Gradient sky, world‑anchored sun disk/glow, correct camera rotation.
+- Clouds: Two layers — wispy FBM and cartoon puffy — horizon fade; toggle with `K` (None/Wispy/Both/Puffy).
+- HUD: Crosshair, selected block label, music label, cloud mode label.
+- Audio: Toggle music (`M`), choose tracks (`,`, `.`, `1–6`).
+
 ## Project Structure & Module Organization
 - `public/`: Browser code and assets
   - `index.html`: Entry HTML; mounts the canvas and HUD.
