@@ -7,6 +7,7 @@
 const canvas = document.getElementById('glcanvas');
 const selectedEl = document.getElementById('selected');
 const musicEl = document.getElementById('music');
+const labEl = document.getElementById('musiclab');
 
 // --- Audio (8-bit SFX + music) ---
 let audioCtx = null;
@@ -130,7 +131,7 @@ function pattern(...rows){
 // Exact original single-track patterns (preserve rests)
 // (Track patterns follow)
 
-const tracks = [
+let baseTracks = [
   {
     name: 'Upbeat Meadow', bpm: 128,
     lead: pattern(
@@ -224,6 +225,8 @@ const tracks = [
   },
 ];
 
+let tracks = baseTracks.slice();
+
 // Debug: log lead/bass lengths for all tracks
 for (let i=0;i<tracks.length;i++){
   const tr = tracks[i];
@@ -245,7 +248,7 @@ function scheduleStep(time, step){
   const l = tr.lead[idx];
   if (l){
     const o = audioCtx.createOscillator();
-    o.type = 'square';
+    o.type = (tr.leadWave || 'square');
     o.frequency.value = mtof(l);
     const g = audioCtx.createGain();
     g.gain.value = 0.0001;
@@ -257,7 +260,7 @@ function scheduleStep(time, step){
   const b = tr.bass[idx];
   if (b){
     const o = audioCtx.createOscillator();
-    o.type = 'triangle';
+    o.type = (tr.bassWave || 'triangle');
     o.frequency.value = mtof(b);
     const g = audioCtx.createGain();
     g.gain.value = 0.0001;
@@ -267,7 +270,8 @@ function scheduleStep(time, step){
     o.stop(time + STEP);
   }
   // hat on off-beats
-  if (step % 2 === 1){
+  const s16 = step % 16;
+  if ((tr.hat16 && tr.hat16[s16]) || (!tr.hat16 && (step % 2 === 1))){
     const t = time;
     const bufferSize = Math.max(1, Math.floor(audioCtx.sampleRate * 0.02));
     const buffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
@@ -279,7 +283,7 @@ function scheduleStep(time, step){
     src.connect(hp).connect(g).connect(mixMusic()); src.start(t);
   }
   // kick on downbeats (quarter notes on 16th grid => every 4 steps)
-  if (step % 4 === 0){
+  if ((tr.kick16 && tr.kick16[s16]) || (!tr.kick16 && (step % 4 === 0))){
     const o = audioCtx.createOscillator(); o.type='sine';
     const g = audioCtx.createGain(); g.gain.value=0.0001;
     o.frequency.setValueAtTime(110, time);
@@ -1037,6 +1041,8 @@ if (!loadPlayer()) respawn(); else ensurePlayerNotStuck();
 const keys = new Set();
 let sprint = false;
 window.addEventListener('keydown', (e)=>{
+  // If music lab is open, only allow 'G' to close it; ignore other game controls
+  if (labEl && !labEl.classList.contains('hidden') && e.code !== 'KeyG') return;
   keys.add(e.code);
   if (!audioCtx) initAudio(); else resumeAudio();
   if (e.code==='ShiftLeft' || e.code==='ShiftRight') sprint = true;
@@ -1046,6 +1052,10 @@ window.addEventListener('keydown', (e)=>{
     resumeAudio();
     musicEnabled = !musicEnabled;
     if (musicEnabled) startMusic(); else stopMusic();
+  }
+  if (e.code==='KeyG') { // toggle music lab
+    e.preventDefault();
+    toggleMusicLab();
   }
   if (e.code==='KeyP') { // Save world to clipboard
     e.preventDefault();
@@ -1066,6 +1076,7 @@ window.addEventListener('keydown', (e)=>{
   // Removed track 7
 });
 window.addEventListener('keyup', (e)=>{
+  if (labEl && !labEl.classList.contains('hidden')) return;
   keys.delete(e.code);
   if (e.code==='ShiftLeft' || e.code==='ShiftRight') sprint = false;
 });
@@ -1074,7 +1085,10 @@ canvas.addEventListener('click', ()=>{
   initAudio();
   resumeAudio();
   updateMusicLabel();
-  canvas.requestPointerLock();
+  // Do not lock pointer if music lab is open
+  if (!labEl || labEl.classList.contains('hidden')) {
+    canvas.requestPointerLock();
+  }
 });
 
 document.addEventListener('pointerlockchange', ()=>{
@@ -1113,9 +1127,11 @@ updateSelectedLabel();
 // Cycle selected block: Q/E and [ ]
 window.addEventListener('keydown', (e)=>{
   if (e.code==='KeyQ' || e.code==='BracketLeft') {
+    if (labEl && !labEl.classList.contains('hidden')) return;
     selectedIndex = (selectedIndex-1+placeOptions.length)%placeOptions.length; updateSelectedLabel(); savePlayer();
   }
   if (e.code==='KeyE' || e.code==='BracketRight') {
+    if (labEl && !labEl.classList.contains('hidden')) return;
     selectedIndex = (selectedIndex+1)%placeOptions.length; updateSelectedLabel(); savePlayer();
   }
 });
@@ -1163,6 +1179,7 @@ function breakBlockOnce(){
 window.addEventListener('keydown', (e)=>{
   if (e.code==='KeyB') {
     e.preventDefault();
+    if (labEl && !labEl.classList.contains('hidden')) return;
     placeSelectedBlockOnce();
   }
 });
@@ -1195,6 +1212,7 @@ function placeBlockUnderPlayer(){
 window.addEventListener('keydown', (e)=>{
   if (e.code==='KeyV') {
     e.preventDefault();
+    if (labEl && !labEl.classList.contains('hidden')) return;
     placeBlockUnderPlayer();
   }
 });
@@ -1425,6 +1443,335 @@ function frame(now){
 
 rebuildWorld();
 requestAnimationFrame(frame);
+updateMusicLabel();
+
+// ==== Music Lab (simple 8-bit generator) ====
+const BANK_KEY = 'voxel_music_bank_v1';
+let labState = null;
+let labPreviewTimer = null;
+let labNextTime = 0;
+let labStep = 0;
+
+function defaultLabState(){
+  return {
+    name: 'New Track',
+    bpm: 128,
+    leadWave: 'square',
+    bassWave: 'triangle',
+    lead16: Array(16).fill('.'),
+    bass16: Array(16).fill('.'),
+    hat16: Array(16).fill(0).map((_,i)=> (i%2===1?1:0)),
+    kick16: Array(16).fill(0).map((_,i)=> (i%4===0?1:0)),
+  };
+}
+
+function mtofName(n){
+  // Accept note names like C4, D#4, Bb3 etc.; fallback numeric
+  if (typeof n === 'number') return n;
+  if (!n || n==='.') return null;
+  const s = String(n).trim();
+  if (/^\d+$/.test(s)) return parseInt(s,10);
+  const m = s.match(/^([A-Ga-g])([#b]?)(-?\d)$/);
+  if (!m) return null;
+  const base = {C:0,D:2,E:4,F:5,G:7,A:9,B:11}[m[1].toUpperCase()];
+  let semi = base + (m[2]==='#'?1:(m[2]==='b'?-1:0));
+  const oct = parseInt(m[3],10);
+  return 12*(oct+1)+semi; // MIDI: C4=60
+}
+
+function midiToName(m){
+  if (m==null || !isFinite(m)) return '.';
+  const names = ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
+  const semi = ((m % 12) + 12) % 12;
+  const oct = Math.floor(m/12) - 1;
+  return names[semi] + String(oct);
+}
+
+function buildGrid(selectContainer, initial){
+  selectContainer.textContent='';
+  const notes = ['.', 'C3','D3','E3','F3','G3','A3','B3','C4','D4','E4','F4','G4','A4','B4','C5','D5','E5'];
+  for (let i=0;i<16;i++){
+    const sel = document.createElement('select'); sel.dataset.idx=i;
+    for (const n of notes){
+      const opt = document.createElement('option'); opt.value=n; opt.textContent=n; sel.appendChild(opt);
+    }
+    sel.value = initial[i] || '.';
+    selectContainer.appendChild(sel);
+  }
+}
+function buildBoolGrid(container, initial){
+  container.textContent='';
+  for(let i=0;i<16;i++){
+    const cb = document.createElement('input'); cb.type='checkbox'; cb.dataset.idx=i; cb.checked = !!initial[i];
+    container.appendChild(cb);
+  }
+}
+
+function getLabUI(){
+  const name = document.getElementById('labName').value || 'Untitled';
+  const bpm = Math.max(60, Math.min(200, parseInt(document.getElementById('labBpm').value,10)||128));
+  const leadWave = document.getElementById('labLeadWave').value;
+  const bassWave = document.getElementById('labBassWave').value;
+  const lead16 = Array.from(document.querySelectorAll('#leadGrid select')).map(s=>s.value);
+  const bass16 = Array.from(document.querySelectorAll('#bassGrid select')).map(s=>s.value);
+  const hat16 = Array.from(document.querySelectorAll('#hatGrid input[type="checkbox"]')).map(cb=>cb.checked?1:0);
+  const kick16 = Array.from(document.querySelectorAll('#kickGrid input[type="checkbox"]')).map(cb=>cb.checked?1:0);
+  return { name,bpm,leadWave,bassWave,lead16,bass16,hat16,kick16 };
+}
+function setLabUI(st){
+  document.getElementById('labName').value = st.name;
+  document.getElementById('labBpm').value = st.bpm;
+  document.getElementById('labLeadWave').value = st.leadWave;
+  document.getElementById('labBassWave').value = st.bassWave;
+  buildGrid(document.getElementById('leadGrid'), st.lead16);
+  buildGrid(document.getElementById('bassGrid'), st.bass16);
+  buildBoolGrid(document.getElementById('hatGrid'), st.hat16);
+  buildBoolGrid(document.getElementById('kickGrid'), st.kick16);
+}
+
+function loadBank(){
+  try{
+    const s = localStorage.getItem(BANK_KEY);
+    if (!s) return new Array(16).fill(null);
+    const arr = JSON.parse(s);
+    return Array.isArray(arr)?arr:new Array(16).fill(null);
+  }catch(e){ return new Array(16).fill(null); }
+}
+function saveBank(bank){
+  try{ localStorage.setItem(BANK_KEY, JSON.stringify(bank)); }catch(e){}
+}
+
+function toggleMusicLab(){
+  const hidden = labEl.classList.toggle('hidden');
+  if (!hidden){
+    // open
+    if (!labState) labState = defaultLabState();
+    // stop game music and start live preview
+    stopMusic();
+    // clear movement and exit pointer lock
+    keys.clear(); sprint = false;
+    try { if (document.pointerLockElement) document.exitPointerLock(); } catch {}
+    // build selects once
+    const slotSel = document.getElementById('labSlot');
+    if (!slotSel.dataset.ready){
+      for(let i=0;i<16;i++){ const opt=document.createElement('option'); opt.value=String(i); opt.textContent=`Slot ${i+1}`; slotSel.appendChild(opt); }
+      slotSel.dataset.ready = '1';
+      document.getElementById('labSave').onclick = ()=>{
+        const bank = loadBank();
+        const i = parseInt(slotSel.value,10)||0;
+        bank[i] = getLabUI();
+        saveBank(bank);
+        rebuildTracksFromBank();
+        updateMusicLabel();
+        refreshLabSlotNames();
+      };
+      document.getElementById('labLoad').onclick = ()=>{
+        const bank = loadBank();
+        const i = parseInt(slotSel.value,10)||0;
+        const st = bank[i] || defaultLabState();
+        setLabUI(st);
+        // apply to live state so preview reflects load immediately
+        try { labState = JSON.parse(JSON.stringify(st)); } catch { labState = st; }
+        refreshLabSlotNames();
+      };
+      document.getElementById('labStopPreview').onclick = ()=> toggleLabPreviewButton();
+      document.getElementById('labClose').onclick = ()=> toggleMusicLab();
+      // Built-in select
+      const builtinSel = document.getElementById('labBuiltin');
+      const btnBuiltin = document.getElementById('labBuiltinLoad');
+      if (builtinSel){
+        builtinSel.innerHTML = '';
+        for (let i=0;i<baseTracks.length;i++){
+          const opt = document.createElement('option');
+          opt.value = String(i);
+          opt.textContent = `Track ${i+1}: ${baseTracks[i].name}`;
+          builtinSel.appendChild(opt);
+        }
+        btnBuiltin.onclick = ()=>{
+          const idx = parseInt(builtinSel.value,10)||0;
+          loadBuiltinToLab(idx);
+        };
+      }
+    }
+    setLabUI(labState);
+    // attach live update handlers
+    attachLabLiveHandlers();
+    refreshLabSlotNames();
+    startLabPreview();
+  } else {
+    // close
+    labState = getLabUI();
+    stopLabPreview();
+    if (musicEnabled) startMusic();
+  }
+}
+
+function attachLabLiveHandlers(){
+  const nameEl = document.getElementById('labName');
+  const bpmEl = document.getElementById('labBpm');
+  const leadWaveEl = document.getElementById('labLeadWave');
+  const bassWaveEl = document.getElementById('labBassWave');
+  const leadGrid = document.getElementById('leadGrid');
+  const bassGrid = document.getElementById('bassGrid');
+  const hatGrid = document.getElementById('hatGrid');
+  const kickGrid = document.getElementById('kickGrid');
+
+  nameEl.oninput = ()=>{ labState.name = nameEl.value; };
+  bpmEl.oninput = ()=>{ labState.bpm = Math.max(60, Math.min(200, parseInt(bpmEl.value,10)||128)); };
+  leadWaveEl.onchange = ()=>{ labState.leadWave = leadWaveEl.value; };
+  bassWaveEl.onchange = ()=>{ labState.bassWave = bassWaveEl.value; };
+  leadGrid.onchange = (e)=>{ if (e.target.tagName==='SELECT'){ const i=+e.target.dataset.idx; labState.lead16[i]=e.target.value; } };
+  bassGrid.onchange = (e)=>{ if (e.target.tagName==='SELECT'){ const i=+e.target.dataset.idx; labState.bass16[i]=e.target.value; } };
+  hatGrid.onchange = (e)=>{ if (e.target.type==='checkbox'){ const i=+e.target.dataset.idx; labState.hat16[i]=e.target.checked?1:0; } };
+  kickGrid.onchange = (e)=>{ if (e.target.type==='checkbox'){ const i=+e.target.dataset.idx; labState.kick16[i]=e.target.checked?1:0; } };
+}
+
+function refreshLabSlotNames(){
+  const slotSel = document.getElementById('labSlot');
+  if (!slotSel) return;
+  const bank = loadBank();
+  const maxLen = 18;
+  for (let i=0;i<16;i++){
+    const name = (bank[i] && bank[i].name) ? String(bank[i].name) : 'Empty';
+    const txt = `${i+1}: ${name.length>maxLen ? name.slice(0,maxLen-1)+'…' : name}`;
+    if (slotSel.options[i]) slotSel.options[i].textContent = txt;
+    else {
+      const opt = document.createElement('option');
+      opt.value = String(i); opt.textContent = txt; slotSel.appendChild(opt);
+    }
+  }
+}
+
+function loadBuiltinToLab(idx){
+  const tr = baseTracks[idx];
+  if (!tr) return;
+  const st = defaultLabState();
+  st.name = `${tr.name} (edit)`;
+  st.bpm = tr.bpm || DEFAULT_BPM;
+  st.leadWave = tr.leadWave || 'square';
+  st.bassWave = tr.bassWave || 'triangle';
+  st.lead16 = [];
+  st.bass16 = [];
+  for (let i=0;i<16;i++){
+    const lm = tr.lead && tr.lead[i];
+    const bm = tr.bass && tr.bass[i];
+    st.lead16[i] = (lm!=null) ? midiToName(lm) : '.';
+    st.bass16[i] = (bm!=null) ? midiToName(bm) : '.';
+  }
+  st.hat16 = tr.hat16 ? tr.hat16.slice(0,16) : defaultLabState().hat16;
+  st.kick16 = tr.kick16 ? tr.kick16.slice(0,16) : defaultLabState().kick16;
+  // Apply to UI and state
+  setLabUI(st);
+  try { labState = JSON.parse(JSON.stringify(st)); } catch { labState = st; }
+}
+
+function repeat16to64(arr16, mapFn){
+  const out = new Array(64);
+  for(let i=0;i<64;i++){
+    const v = arr16[i%16];
+    out[i] = mapFn?mapFn(v,i):v;
+  }
+  return out;
+}
+
+// Build tracks array from base + saved slots
+function rebuildTracksFromBank(){
+  const bank = loadBank();
+  const user = [];
+  for (let i=0;i<bank.length;i++){
+    const st = bank[i];
+    if (!st) continue;
+    const lead64 = repeat16to64(st.lead16||[], (v)=>{ const m=mtofName(v); return m||null; });
+    const bass64 = repeat16to64(st.bass16||[], (v)=>{ const m=mtofName(v); return m||null; });
+    user.push({
+      name: st.name || `Slot ${i+1}`,
+      bpm: Math.max(60, Math.min(200, st.bpm||128)),
+      lead: lead64,
+      bass: bass64,
+      leadWave: st.leadWave || 'square',
+      bassWave: st.bassWave || 'triangle',
+      hat16: (st.hat16||Array(16).fill(0)),
+      kick16: (st.kick16||Array(16).fill(0)),
+    });
+  }
+  tracks = baseTracks.concat(user);
+  if (currentTrackIndex >= tracks.length) currentTrackIndex = 0;
+}
+
+function startLabPreview(){
+  if (!audioCtx) initAudio();
+  if (labPreviewTimer) return; // already running
+  labNextTime = audioCtx.currentTime + 0.05;
+  // do not reset labStep to preserve groove while editing
+  labPreviewTimer = setInterval(()=>{
+    const lookAhead = 0.2;
+    while (labNextTime < audioCtx.currentTime + lookAhead){
+      const cur = labState || defaultLabState();
+      const stepLen = (60 / (Math.max(60, Math.min(200, cur.bpm||128))))/4;
+      scheduleLabStep(labNextTime, labStep);
+      labNextTime += stepLen;
+      labStep = (labStep+1)%64;
+    }
+  }, 25);
+  updateLabPreviewButton(true);
+}
+function stopLabPreview(){ if (labPreviewTimer){ clearInterval(labPreviewTimer); labPreviewTimer=null; } }
+
+function scheduleLabStep(time, step){
+  const st = labState || defaultLabState();
+  const s16 = step%16;
+  // lead
+  const l = st.lead16[s16];
+  const lm = mtofName(l);
+  if (lm){
+    const o = audioCtx.createOscillator(); o.type = st.leadWave||'square'; o.frequency.value = mtof(lm);
+    const g = audioCtx.createGain(); g.gain.value=0.0001; envGain(g, time, 0.002, 0.06, 0.25, 0.05, (60/(st.bpm||128))/4*0.9);
+    o.connect(g).connect(mixMusic()); o.start(time); o.stop(time + (60/(st.bpm||128))/4*0.95);
+  }
+  // bass
+  const b = st.bass16[s16];
+  const bm = mtofName(b);
+  if (bm){
+    const o = audioCtx.createOscillator(); o.type = st.bassWave||'triangle'; o.frequency.value = mtof(bm);
+    const g = audioCtx.createGain(); g.gain.value=0.0001; envGain(g, time, 0.002, 0.05, 0.2, 0.08, (60/(st.bpm||128))/4);
+    o.connect(g).connect(mixMusic()); o.start(time); o.stop(time + (60/(st.bpm||128))/4);
+  }
+  // drums
+  if (st.hat16[s16]){
+    const t = time;
+    const bufferSize = Math.max(1, Math.floor(audioCtx.sampleRate * 0.02));
+    const buffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
+    const data = buffer.getChannelData(0);
+    for (let i=0;i<bufferSize;i++) data[i] = Math.random()*2-1;
+    const src = audioCtx.createBufferSource(); src.buffer = buffer;
+    const hp = audioCtx.createBiquadFilter(); hp.type='highpass'; hp.frequency.value=3000;
+    const g = audioCtx.createGain(); g.gain.value=0.0001; envGain(g, t, 0.001, 0.01, 0.12, 0.03, 0.02);
+    src.connect(hp).connect(g).connect(mixMusic()); src.start(t);
+  }
+  if (st.kick16[s16]){
+    const o = audioCtx.createOscillator(); o.type='sine'; const g=audioCtx.createGain(); g.gain.value=0.0001;
+    o.frequency.setValueAtTime(110, time); o.frequency.exponentialRampToValueAtTime(48, time+0.12);
+    envGain(g, time, 0.001, 0.05, 0.3, 0.06, 0.15); o.connect(g).connect(mixMusic()); o.start(time); o.stop(time+0.18);
+  }
+}
+
+function updateLabPreviewButton(running){
+  const btn = document.getElementById('labStopPreview');
+  if (!btn) return;
+  btn.textContent = running ? 'Stop Preview' : 'Preview';
+}
+function toggleLabPreviewButton(){
+  if (labPreviewTimer){
+    stopLabPreview();
+    updateLabPreviewButton(false);
+  } else {
+    startLabPreview();
+    updateLabPreviewButton(true);
+  }
+}
+
+// Build tracks from bank on startup so slot tracks are available
+rebuildTracksFromBank();
 updateMusicLabel();
 
 // Basic safety: prevent context menu on RMB

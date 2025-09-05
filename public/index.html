@@ -8,7 +8,7 @@
   </head>
   <body>
     <canvas id="glcanvas"></canvas>
-      <div id="hud">
+    <div id="hud">
         <div id="instructions">
           <strong>Voxel Craft</strong>
           <div>Click canvas to lock mouse</div>
@@ -22,8 +22,75 @@
         </div>
         <div id="selected"></div>
         <div id="music"></div>
-        <div id="crosshair">+</div>
+      <div id="crosshair">+</div>
+    </div>
+    <div id="musiclab" class="hidden">
+      <div class="panel">
+        <div class="row space">
+          <strong>Music Lab</strong>
+          <button id="labClose" class="btn">Close (G)</button>
+        </div>
+        <div class="row">
+          <label>Name <input id="labName" type="text" value="New Track" /></label>
+          <label>BPM <input id="labBpm" type="number" min="60" max="200" step="1" value="128" /></label>
+          <label>Lead Wave
+            <select id="labLeadWave">
+              <option>square</option>
+              <option>triangle</option>
+              <option>sawtooth</option>
+            </select>
+          </label>
+          <label>Bass Wave
+            <select id="labBassWave">
+              <option>triangle</option>
+              <option>square</option>
+              <option>sawtooth</option>
+            </select>
+          </label>
+        </div>
+        <div class="row">
+          <div class="col">
+            <div class="label">Lead (16 steps)</div>
+            <div id="leadGrid" class="grid"></div>
+          </div>
+          <div class="col">
+            <div class="label">Bass (16 steps)</div>
+            <div id="bassGrid" class="grid"></div>
+          </div>
+        </div>
+        <div class="row">
+          <div class="col">
+            <div class="label">Hi‑hat</div>
+            <div id="hatGrid" class="grid-bool"></div>
+          </div>
+          <div class="col">
+            <div class="label">Kick</div>
+            <div id="kickGrid" class="grid-bool"></div>
+          </div>
+        </div>
+        <div class="row space">
+          <div>
+            <label>Slot
+              <select id="labSlot"></select>
+            </label>
+            <button id="labSave" class="btn">Save to Slot</button>
+            <button id="labLoad" class="btn">Load Slot</button>
+          </div>
+          <div>
+            <em style="opacity:.8">Preview runs while Music Lab is open</em>
+          </div>
+          <div>
+            <button id="labStopPreview" class="btn">Stop Preview</button>
+          </div>
+        </div>
+        <div class="row">
+          <label>Built-in Track
+            <select id="labBuiltin"></select>
+          </label>
+          <button id="labBuiltinLoad" class="btn">Load Built-in</button>
+        </div>
       </div>
+    </div>
     <script type="module" src="main.js"></script>
   </body>
   </html>
