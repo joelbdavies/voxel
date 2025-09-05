@@ -1515,6 +1515,19 @@ const BLOCK_TILES = {
   [BLOCK.LAMP]:  { top: tileIndex.lamp, side: tileIndex.lamp, bottom: tileIndex.lamp },
 };
 
+// Representative colors for block outline/UI accents (match drawTile base colors)
+const BLOCK_COLOR = {
+  [BLOCK.GRASS]: '#6fbf50',
+  [BLOCK.DIRT]:  '#8b5a2b',
+  [BLOCK.STONE]: '#9aa0a6',
+  [BLOCK.WATER]: '#3fa7ff',
+  [BLOCK.SAND]:  '#e5d38c',
+  [BLOCK.ROCK]:  '#808080',
+  [BLOCK.WOOD]:  '#9b6b3d',
+  [BLOCK.LEAF]:  '#2a5e1f',
+  [BLOCK.LAMP]:  '#f2e48a',
+};
+
 function inBounds(x,y,z){
   return x>=0 && z>=0 && y>=0 && x<WORLD_W && z<WORLD_D && y<WORLD_H;
 }
@@ -1693,6 +1706,8 @@ updateMusicLabel();
 if (flyMode) { try { player.onGround = false; player.vel[1] = 0; } catch(e){} }
 // Initialize mobile UI (buttons + menu) if touch
 initMobileUI();
+// Attempt to autostart music on load if enabled (may be deferred by browser until user gesture)
+try { if (musicEnabled) initAudio(); } catch {}
 window.addEventListener('keydown', (e)=>{
   if (e.code==='F3') {
     e.preventDefault();
@@ -1822,6 +1837,8 @@ function onTouchStart(ev){
   if (labEl && !labEl.classList.contains('hidden')) return;
   const t = ev.touches[0]; if (!t) return;
   ev.preventDefault();
+  // Try to ensure audio starts on first touch if enabled
+  try { initAudio(); resumeAudio(); } catch {}
   touchActive = true; tapCandidate = true; touchMoveAccum = 0; touchStartTime = performance.now();
   lastTouchX = t.clientX; lastTouchY = t.clientY;
   // Start forward after a short hold to allow tap interactions
@@ -1883,6 +1900,15 @@ let selectedIndex = 0;
 function updateSelectedLabel(){
   const opt = placeOptions[selectedIndex];
   selectedEl.textContent = `Selected: ${opt.name}`;
+  // Mobile: reflect in switch button label + outline color
+  const btnSwitch = document.getElementById('btnSwitch');
+  if (btnSwitch){
+    btnSwitch.textContent = opt.name;
+    let color = '#cccccc';
+    if (opt.type === 'block') color = BLOCK_COLOR[opt.id] || color;
+    else if (opt.type === 'tree') color = BLOCK_COLOR[BLOCK.LEAF] || color;
+    btnSwitch.style.borderColor = color;
+  }
 }
 updateSelectedLabel();
 // Apply any loaded selection from storage now that variables exist
@@ -1899,6 +1925,10 @@ function initMobileUI(){
   const mc = document.getElementById('mobileControls');
   if (mc) mc.classList.remove('hidden');
   const btnJump = document.getElementById('btnJump');
+  const btnUp = document.getElementById('btnUp');
+  const btnDown = document.getElementById('btnDown');
+  const btnLeft = document.getElementById('btnLeft');
+  const btnRight = document.getElementById('btnRight');
   const btnAdd = document.getElementById('btnAdd');
   const btnRemove = document.getElementById('btnRemove');
   const btnSwitch = document.getElementById('btnSwitch');
@@ -1915,6 +1945,8 @@ function initMobileUI(){
   const mTrackLabel = document.getElementById('menuTrackLabel');
   const mFly = document.getElementById('menuFly');
   const mRespawn = document.getElementById('menuRespawn');
+  const mSave = document.getElementById('menuSave');
+  const mLoad = document.getElementById('menuLoad');
 
   const setBtnHold = (el, code)=>{
     if (!el) return;
@@ -1926,6 +1958,10 @@ function initMobileUI(){
     el.addEventListener('mouseleave',(e)=>{ e.preventDefault(); keys.delete(code); });
   };
   setBtnHold(btnJump, 'Space');
+  setBtnHold(btnUp, 'KeyW');
+  setBtnHold(btnDown, 'KeyS');
+  setBtnHold(btnLeft, 'KeyA');
+  setBtnHold(btnRight, 'KeyD');
 
   if (btnAdd) btnAdd.addEventListener('click', (e)=>{ e.preventDefault(); placeSelectedBlockOnce(); });
   if (btnRemove) btnRemove.addEventListener('click', (e)=>{ e.preventDefault(); breakBlockOnce(); });
@@ -1960,6 +1996,8 @@ function initMobileUI(){
   if (mNextTr) mNextTr.addEventListener('click', (e)=>{ e.preventDefault(); setTrack(currentTrackIndex+1); updateMenuLabels(); });
   if (mFly) mFly.addEventListener('click', (e)=>{ e.preventDefault(); flyMode=!flyMode; if(!flyMode){ player.vel[1]=0; } saveSettings(); updateMenuLabels(); });
   if (mRespawn) mRespawn.addEventListener('click', (e)=>{ e.preventDefault(); respawn(); closeMenu(); });
+  if (mSave) mSave.addEventListener('click', (e)=>{ e.preventDefault(); copyWorldCode(); });
+  if (mLoad) mLoad.addEventListener('click', (e)=>{ e.preventDefault(); promptLoadWorldCode(); closeMenu(); });
 }
 
 function updateCloudsLabel(){

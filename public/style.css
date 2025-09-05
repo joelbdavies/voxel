@@ -79,6 +79,17 @@ html, body {
 #mobileControls .mc-right { display:flex; gap: 10px; }
 .btn.round { border-radius: 999px; width: 52px; height: 52px; display:flex; align-items:center; justify-content:center; font-size: 18px; }
 
+/* D-pad layout */
+.dpad { display:grid; grid-template-columns: 48px 48px 48px; grid-template-rows: 48px 48px 48px; gap: 6px; grid-template-areas: 
+  ". up ."
+  "left . right"
+  ". down ."; }
+.dpad #btnUp{ grid-area: up; }
+.dpad #btnDown{ grid-area: down; }
+.dpad #btnLeft{ grid-area: left; }
+.dpad #btnRight{ grid-area: right; }
+.dpad .btn{ width: 48px; height: 48px; border-radius: 8px; }
+
 /* Reuse Music Lab button look for mobile controls */
 .btn { background: #1f2833; color: #eaeaea; border: 1px solid #2a2f36; padding: 8px 12px; border-radius: 6px; cursor: pointer; }
 
