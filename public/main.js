@@ -293,12 +293,12 @@ function scheduleStep(time, step){
   }
 }
 
-function startMusic(){
+function startMusic(resume=false){
   if (!audioCtx) return;
   stopMusic();
   updateMusicTiming();
   nextNoteTime = audioCtx.currentTime + 0.05;
-  musicStep = 0;
+  if (!resume) musicStep = 0;
   musicTimer = setInterval(()=>{
     const lookAhead = 0.2;
     while (nextNoteTime < audioCtx.currentTime + lookAhead){
@@ -801,7 +801,22 @@ function scheduleSave(){
 }
 window.addEventListener('beforeunload', ()=>{ saveWorld(); savePlayer(); });
 document.addEventListener('visibilitychange', ()=>{
-  if (document.visibilityState === 'hidden'){ saveWorld(); savePlayer(); }
+  if (document.visibilityState === 'hidden'){
+    // Persist state
+    saveWorld(); savePlayer();
+    // Pause all audio scheduling to avoid throttled/uneven timers
+    stopMusic();
+    stopLabPreview();
+  } else if (document.visibilityState === 'visible'){
+    // Resume appropriate audio path
+    initAudio();
+    resumeAudio();
+    if (labEl && !labEl.classList.contains('hidden')){
+      startLabPreview();
+    } else if (musicEnabled) {
+      startMusic(true); // resume at previous step
+    }
+  }
 });
 
 function clampPitch(p){
