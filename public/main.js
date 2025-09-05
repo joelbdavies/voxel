@@ -666,10 +666,12 @@ void main(){
   col = mix(col, moonColor, mglow*0.25);
   col = mix(col, vec3(1.0), moon);
 
-  // Stars: faint speckles at night
-  float starNoise = noise3(dir * 120.0);
-  float stars = step(0.996, starNoise) * (1.0 - u_day);
-  col += vec3(1.0) * stars * 0.35;
+  // Stars: brighter and denser at night with subtle twinkle
+  float starVal = noise3(dir * 80.0);
+  float stars = smoothstep(0.990, 0.999, starVal) * (1.0 - u_day);
+  float tw = 0.85 + 0.15 * sin(u_time * 3.0 + starVal * 50.0);
+  stars *= tw;
+  col += vec3(1.0) * stars * 0.60;
 
   gl_FragColor = vec4(col, 1.0);
 }`;
