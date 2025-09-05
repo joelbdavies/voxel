@@ -768,6 +768,54 @@ gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([
   -1,  3,
 ]), gl.STATIC_DRAW);
 
+// --- Rain overlay (screen-space) ---
+const RAIN_VS = `
+attribute vec2 a_pos;
+varying vec2 v_uv;
+void main(){
+  v_uv = a_pos * 0.5 + 0.5;
+  gl_Position = vec4(a_pos, 0.0, 1.0);
+}`;
+const RAIN_FS = `
+precision mediump float;
+varying vec2 v_uv;
+uniform float u_time;
+uniform float u_aspect;
+uniform float u_alpha;
+uniform float u_day;
+uniform float u_yaw;
+
+// Thin diagonal lines moving downward; two layers for parallax
+float stripe(vec2 uv, float density, float speed, float angle, float width){
+  // rotate uv by angle
+  float ca = cos(angle), sa = sin(angle);
+  vec2 ruv = vec2(ca*uv.x - sa*uv.y, sa*uv.x + ca*uv.y);
+  float coord = ruv.x * density + u_time * speed;
+  float f = abs(fract(coord) - 0.5);
+  float line = smoothstep(width, 0.0, f);
+  return line;
+}
+
+void main(){
+  vec2 uv = v_uv;
+  uv.x *= u_aspect;
+  // Two layers: different angles and speeds
+  float l1 = stripe(uv, 45.0, 1.2, -0.9 + u_yaw*0.0, 0.06);
+  float l2 = stripe(uv*1.2 + vec2(0.12,0.0), 30.0, 1.8, -1.1 + u_yaw*0.0, 0.05);
+  float rain = clamp(l1*0.7 + l2*0.5, 0.0, 1.0);
+  // Dim at night slightly
+  float vis = mix(0.65, 1.0, u_day);
+  float a = rain * u_alpha * vis;
+  gl_FragColor = vec4(vec3(0.85,0.9,1.0)*0.9, a);
+}`;
+const rainProg = makeProgram(RAIN_VS, RAIN_FS);
+const rain_a_pos = gl.getAttribLocation(rainProg, 'a_pos');
+const rain_u_time = gl.getUniformLocation(rainProg, 'u_time');
+const rain_u_aspect = gl.getUniformLocation(rainProg, 'u_aspect');
+const rain_u_alpha = gl.getUniformLocation(rainProg, 'u_alpha');
+const rain_u_day = gl.getUniformLocation(rainProg, 'u_day');
+const rain_u_yaw = gl.getUniformLocation(rainProg, 'u_yaw');
+
 // --- Post-process (FXAA-like) ---
 const POST_VS = `
 attribute vec2 a_pos;
@@ -1860,6 +1908,18 @@ let last = performance.now();
 let worldTime = 0; // seconds
 const DAY_LENGTH = 240; // seconds per full cycle (4 minutes)
 const DAY_FRACTION = 0.7; // portion of cycle spent in daytime (night = 0.3)
+// Rain scheduling
+let rainActive = false;
+let rainTimeLeft = 0;
+let rainCheckTimer = 5; // seconds until next start check
+function randNormal(mean, std){
+  // Box-Muller
+  let u = 0, v = 0;
+  while (u===0) u = Math.random();
+  while (v===0) v = Math.random();
+  const z = Math.sqrt(-2.0*Math.log(u)) * Math.cos(2.0*Math.PI*v);
+  return mean + std * z;
+}
 // FPS counter accumulators
 let fpsAccumTime = 0;
 let fpsAccumFrames = 0;
@@ -1873,6 +1933,20 @@ function frame(now){
     worldTime = initialTimePhase * DAY_LENGTH;
   }
   worldTime += dt;
+  // Rain timers
+  if (rainActive){
+    rainTimeLeft -= dt;
+    if (rainTimeLeft <= 0){ rainActive = false; rainCheckTimer = 10 + Math.random()*10; }
+  } else {
+    rainCheckTimer -= dt;
+    if (rainCheckTimer <= 0){
+      rainCheckTimer = 8 + Math.random()*12;
+      if (Math.random() < 0.25){
+        rainActive = true;
+        rainTimeLeft = Math.min(90, Math.max(8, randNormal(35, 12)));
+      }
+    }
+  }
   // FPS accumulation and update label ~1/sec
   fpsAccumTime += dt;
   fpsAccumFrames += 1;
@@ -2082,6 +2156,24 @@ function frame(now){
     gl.uniform1i(post_u_scene, 0);
     gl.uniform2f(post_u_invRes, 1.0/gl.drawingBufferWidth, 1.0/gl.drawingBufferHeight);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
+  }
+  // Rain overlay on default framebuffer (after post-process if any)
+  if (rainActive){
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+    gl.disable(gl.DEPTH_TEST);
+    gl.useProgram(rainProg);
+    gl.bindBuffer(gl.ARRAY_BUFFER, skyVBO);
+    gl.enableVertexAttribArray(rain_a_pos);
+    gl.vertexAttribPointer(rain_a_pos, 2, gl.FLOAT, false, 0, 0);
+    gl.uniform1f(rain_u_time, now * 0.001);
+    gl.uniform1f(rain_u_aspect, gl.drawingBufferWidth / gl.drawingBufferHeight);
+    gl.uniform1f(rain_u_alpha, 0.25);
+    gl.uniform1f(rain_u_day, day);
+    gl.uniform1f(rain_u_yaw, player.yaw);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    gl.disable(gl.BLEND);
   }
 
   requestAnimationFrame(frame);
