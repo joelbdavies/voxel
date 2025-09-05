@@ -1184,6 +1184,15 @@ window.addEventListener('keydown', (e)=>{
   }
 });
 
+// Bind N to break once
+window.addEventListener('keydown', (e)=>{
+  if (e.code==='KeyN') {
+    e.preventDefault();
+    if (labEl && !labEl.classList.contains('hidden')) return;
+    breakBlockOnce();
+  }
+});
+
 function placeBlockUnderPlayer(){
   const px = player.pos[0], py = player.pos[1], pz = player.pos[2];
   const bx = Math.floor(px);
@@ -1220,11 +1229,7 @@ window.addEventListener('keydown', (e)=>{
 let mouseButtons = 0;
 window.addEventListener('mousedown', (e)=>{ 
   mouseButtons |= 1<<e.button; 
-  // Only allow breaking when pointer is already locked to the canvas.
-  // This prevents the initial click-to-lock from breaking a block.
-  if (e.button === 0 && document.pointerLockElement === canvas) {
-    breakBlockOnce();
-  }
+  // Left click no longer breaks blocks; reserved for camera/pointer lock.
 });
 window.addEventListener('mouseup',   (e)=>{ mouseButtons &= ~(1<<e.button); });
 
