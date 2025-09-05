@@ -328,6 +328,7 @@ function setTrack(i){
   const prev = currentTrackIndex;
   currentTrackIndex = i;
   updateMusicLabel();
+  saveSettings();
   if (audioCtx && musicEnabled){
     // Insert a short gap (0.5s) when changing songs to avoid abrupt overlap
     if (musicStartTimer){ clearTimeout(musicStartTimer); musicStartTimer=null; }
@@ -887,6 +888,7 @@ const blocks = new Uint8Array(WORLD_W * WORLD_H * WORLD_D); // 0=air, >0 block i
 const STORAGE_KEY = 'voxel_world_v1';
 const PLAYER_KEY = 'voxel_player_v1';
 const TIME_KEY = 'voxel_time_phase_v1'; // stores phase in [0,1)
+const SETTINGS_KEY = 'voxel_settings_v1';
 
 function bytesToBase64(bytes){
   let binary = '';
@@ -903,6 +905,42 @@ function base64ToBytes(b64){
   const out = new Uint8Array(len);
   for (let i=0;i<len;i++) out[i] = binary.charCodeAt(i);
   return out;
+}
+
+// Settings persistence (clouds, time mode, torch, FXAA, music, track)
+function saveSettings(){
+  try {
+    const payload = {
+      cloudMode,
+      timeMode,
+      torchEnabled,
+      fxaaEnabled,
+      musicEnabled,
+      currentTrackIndex,
+    };
+    localStorage.setItem(SETTINGS_KEY, JSON.stringify(payload));
+  } catch (e) {
+    console.warn('Failed saving settings:', e);
+  }
+}
+function loadSettings(){
+  try {
+    const s = localStorage.getItem(SETTINGS_KEY);
+    if (!s) return false;
+    const obj = JSON.parse(s);
+    if (obj && typeof obj === 'object'){
+      if (typeof obj.cloudMode === 'number') cloudMode = obj.cloudMode & 3;
+      if (typeof obj.timeMode === 'number') timeMode = Math.max(0, Math.min(2, obj.timeMode|0));
+      if (typeof obj.torchEnabled === 'boolean') torchEnabled = obj.torchEnabled;
+      if (typeof obj.fxaaEnabled === 'boolean') fxaaEnabled = obj.fxaaEnabled;
+      if (typeof obj.musicEnabled === 'boolean') musicEnabled = obj.musicEnabled;
+      if (typeof obj.currentTrackIndex === 'number') currentTrackIndex = (obj.currentTrackIndex|0);
+      return true;
+    }
+  } catch (e) {
+    console.warn('Failed loading settings:', e);
+  }
+  return false;
 }
 
 // URL-safe base64 helpers (no padding)
@@ -1426,6 +1464,14 @@ let timeMode = 0;
 let torchEnabled = false;
 function updateTorchLabel(){ if (torchEl) torchEl.textContent = `Torch: ${torchEnabled ? 'On' : 'Off'} (L)`; }
 function updateFxaaLabel(){ if (fxaaEl) fxaaEl.textContent = `AA: ${fxaaEnabled ? 'FXAA' : 'None'} (F)`; }
+
+// Load persisted settings early to override defaults
+loadSettings();
+// Reflect in HUD immediately
+updateCloudsLabel();
+updateTorchLabel();
+updateFxaaLabel();
+updateMusicLabel();
 window.addEventListener('keydown', (e)=>{
   // If music lab is open, only allow 'G' to close it; ignore other game controls
   if (labEl && !labEl.classList.contains('hidden') && e.code !== 'KeyG') return;
@@ -1438,6 +1484,7 @@ window.addEventListener('keydown', (e)=>{
     resumeAudio();
     musicEnabled = !musicEnabled;
     if (musicEnabled) startMusic(); else stopMusic();
+    saveSettings();
   }
   if (e.code==='KeyG') { // toggle music lab
     e.preventDefault();
@@ -1455,23 +1502,27 @@ window.addEventListener('keydown', (e)=>{
     e.preventDefault();
     cloudMode = (cloudMode + 1) & 3; // 0..3
     updateCloudsLabel();
+    saveSettings();
   }
   if (e.code==='KeyF') { // Toggle FXAA
     e.preventDefault();
     fxaaEnabled = !fxaaEnabled;
     console.log('FXAA:', fxaaEnabled ? 'On' : 'Off');
     updateFxaaLabel();
+    saveSettings();
   }
   if (e.code==='KeyT') { // Toggle time: Auto -> Day -> Night
     e.preventDefault();
     timeMode = (timeMode + 1) % 3;
     const names = ['Auto','Day','Night'];
     console.log('Time:', names[timeMode]);
+    saveSettings();
   }
   if (e.code==='KeyL') { // Torch toggle
     e.preventDefault();
     torchEnabled = !torchEnabled;
     updateTorchLabel();
+    saveSettings();
   }
   if (e.code==='Comma') { setTrack(currentTrackIndex-1); }
   if (e.code==='Period') { setTrack(currentTrackIndex+1); }
