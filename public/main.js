@@ -1826,9 +1826,13 @@ function onMouseMove(e){
 // --- Touch look (mobile) ---
 let touchActive = false;
 let lastTouchX = 0, lastTouchY = 0;
+let forwardTimer = null;
+let forwardActive = false;
 let tapCandidate = false;
 let touchStartTime = 0;
 let touchMoveAccum = 0;
+let mobileTurnLeft = false;
+let mobileTurnRight = false;
 
 function onTouchStart(ev){
   if (!IS_TOUCH) return;
@@ -1839,6 +1843,11 @@ function onTouchStart(ev){
   try { initAudio(); resumeAudio(); } catch {}
   touchActive = true; tapCandidate = true; touchMoveAccum = 0; touchStartTime = performance.now();
   lastTouchX = t.clientX; lastTouchY = t.clientY;
+  // Hold-to-move-forward with longer delay to avoid accidental activation
+  clearTimeout(forwardTimer);
+  forwardTimer = setTimeout(()=>{
+    forwardActive = true; keys.add('KeyW');
+  }, 400);
 }
 function onTouchMove(ev){
   if (!IS_TOUCH || !touchActive) return;
@@ -1860,6 +1869,8 @@ function onTouchEnd(ev){
   if (!IS_TOUCH) return;
   ev.preventDefault();
   touchActive = false;
+  clearTimeout(forwardTimer);
+  if (forwardActive){ keys.delete('KeyW'); forwardActive=false; }
 }
 canvas.addEventListener('touchstart', onTouchStart, { passive:false });
 canvas.addEventListener('touchmove', onTouchMove, { passive:false });
@@ -1943,8 +1954,18 @@ function initMobileUI(){
   setBtnHold(btnJump, 'Space');
   setBtnHold(btnUp, 'KeyW');
   setBtnHold(btnDown, 'KeyS');
-  setBtnHold(btnLeft, 'KeyA');
-  setBtnHold(btnRight, 'KeyD');
+  // Left/Right: turn instead of strafe
+  const turnOnOff = (el, setFlag)=>{
+    if (!el) return;
+    el.addEventListener('touchstart', (e)=>{ e.preventDefault(); setFlag(true); }, {passive:false});
+    el.addEventListener('touchend',   (e)=>{ e.preventDefault(); setFlag(false); }, {passive:false});
+    el.addEventListener('touchcancel',(e)=>{ e.preventDefault(); setFlag(false); }, {passive:false});
+    el.addEventListener('mousedown', (e)=>{ e.preventDefault(); setFlag(true); });
+    el.addEventListener('mouseup',   (e)=>{ e.preventDefault(); setFlag(false); });
+    el.addEventListener('mouseleave',(e)=>{ e.preventDefault(); setFlag(false); });
+  };
+  turnOnOff(btnLeft, (v)=>{ mobileTurnLeft = v; });
+  turnOnOff(btnRight, (v)=>{ mobileTurnRight = v; });
 
   if (btnAdd) btnAdd.addEventListener('click', (e)=>{ e.preventDefault(); placeSelectedBlockOnce(); });
   if (btnRemove) btnRemove.addEventListener('click', (e)=>{ e.preventDefault(); breakBlockOnce(); });
@@ -2017,6 +2038,12 @@ function doPlaceAt(x,y,z, hit){
 }
 
 function placeSelectedBlockOnce(){
+  // Mobile turning: adjust yaw when holding left/right buttons
+  if (IS_TOUCH) {
+    const TURN_SPEED = 1.8; // rad/sec
+    if (mobileTurnLeft)  player.yaw += TURN_SPEED * dt;
+    if (mobileTurnRight) player.yaw -= TURN_SPEED * dt;
+  }
   const yaw = player.yaw;
   const camPos = [player.pos[0], player.pos[1] + EYE_HEIGHT, player.pos[2]];
   const lookDir = [
