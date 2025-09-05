@@ -1466,6 +1466,7 @@ let torchEnabled = false;
 // Fly mode (double Space toggles)
 let flyMode = false;
 let lastSpaceTap = 0;
+let lastCtrlTap = 0;
 function updateTorchLabel(){ if (torchEl) torchEl.textContent = `Torch: ${torchEnabled ? 'On' : 'Off'} (F)`; }
 // (FXAA HUD removed)
 
@@ -1493,6 +1494,15 @@ window.addEventListener('keydown', (e)=>{
       saveSettings();
     }
     lastSpaceTap = t;
+  }
+  if (e.code==='ControlLeft' || e.code==='ControlRight') {
+    const t = performance.now();
+    // Double Ctrl: explicitly end flight (even mid-air)
+    if ((t - lastCtrlTap) < 300 && flyMode) {
+      flyMode = false;
+      saveSettings();
+    }
+    lastCtrlTap = t;
   }
   if (e.code==='KeyM') {
     initAudio();
