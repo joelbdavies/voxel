@@ -1184,9 +1184,9 @@ window.addEventListener('keydown', (e)=>{
   }
 });
 
-// Bind N to break once
+// Bind C to break once
 window.addEventListener('keydown', (e)=>{
-  if (e.code==='KeyN') {
+  if (e.code==='KeyC') {
     e.preventDefault();
     if (labEl && !labEl.classList.contains('hidden')) return;
     breakBlockOnce();
