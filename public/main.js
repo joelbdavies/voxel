@@ -107,6 +107,44 @@ function playNoise({dur=0.06, vol=0.4, type='highpass', cutoff=600, q=0, sustain
 function mixSfx(){ return sfxGain || audioCtx.destination; }
 function mixMusic(){ return musicGain || audioCtx.destination; }
 
+// --- Ambient Rain SFX ---
+let rainSrc = null;
+let rainGain = null;
+function startRainSfx(){
+  if (!audioCtx) return; // wait until user interacts
+  if (rainSrc) return;   // already playing
+  // Build a looping white-noise buffer (2 seconds)
+  const dur = 2.0;
+  const frames = Math.max(1, Math.floor((audioCtx.sampleRate||44100) * dur));
+  const buf = audioCtx.createBuffer(1, frames, audioCtx.sampleRate);
+  const data = buf.getChannelData(0);
+  for (let i=0;i<frames;i++) data[i] = (Math.random()*2 - 1) * 0.6;
+  const src = audioCtx.createBufferSource(); src.buffer = buf; src.loop = true;
+  const hp = audioCtx.createBiquadFilter(); hp.type='highpass'; hp.frequency.value = 200; hp.Q.value=0.2;
+  const lp = audioCtx.createBiquadFilter(); lp.type='lowpass'; lp.frequency.value = 3500; lp.Q.value=0.0;
+  const g = audioCtx.createGain(); g.gain.value = 0.0001; // fade in softly
+  src.connect(hp).connect(lp).connect(g).connect(masterGain || audioCtx.destination);
+  const t = audioCtx.currentTime;
+  // Fade to modest level (not too loud)
+  g.gain.cancelScheduledValues(t);
+  g.gain.setValueAtTime(0.0001, t);
+  g.gain.exponentialRampToValueAtTime(0.06, t+0.6);
+  src.start();
+  rainSrc = src; rainGain = g;
+}
+function stopRainSfx(){
+  if (!audioCtx) { rainSrc=null; rainGain=null; return; }
+  if (!rainSrc || !rainGain) return;
+  const t = audioCtx.currentTime;
+  try {
+    rainGain.gain.cancelScheduledValues(t);
+    rainGain.gain.setValueAtTime(rainGain.gain.value, t);
+    rainGain.gain.exponentialRampToValueAtTime(0.0001, t+0.4);
+  } catch {}
+  try { rainSrc.stop(t+0.45); } catch {}
+  rainSrc = null; rainGain = null;
+}
+
 function sfxBreak(){
   // Layered crunch: mid band + bright hiss + click
   playNoise({dur:0.09, vol:1.0, type:'bandpass', cutoff:1300, q:1.2, sustain:0.5, attack:0.001, decay:0.02, release:0.06});
@@ -1936,13 +1974,13 @@ function frame(now){
   // Rain timers
   if (rainActive){
     rainTimeLeft -= dt;
-    if (rainTimeLeft <= 0){ rainActive = false; rainCheckTimer = 10 + Math.random()*10; }
+    if (rainTimeLeft <= 0){ rainActive = false; rainCheckTimer = 10 + Math.random()*10; stopRainSfx(); }
   } else {
     rainCheckTimer -= dt;
     if (rainCheckTimer <= 0){
       rainCheckTimer = 8 + Math.random()*12;
       if (Math.random() < 0.25){
-        rainActive = true;
+        rainActive = true; startRainSfx();
         rainTimeLeft = Math.min(90, Math.max(8, randNormal(35, 12)));
       }
     }
@@ -2159,6 +2197,8 @@ function frame(now){
   }
   // Rain overlay on default framebuffer (after post-process if any)
   if (rainActive){
+    // Ensure audio rain starts once audio is available
+    if (audioCtx && !rainSrc) startRainSfx();
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     gl.enable(gl.BLEND);
     gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
