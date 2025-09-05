@@ -1648,12 +1648,14 @@ function breakBlockOnce(){
   }
 }
 
-// Bind B to place once
+// Bind B to place: prefer underfoot; fallback to crosshair
 window.addEventListener('keydown', (e)=>{
   if (e.code==='KeyB') {
     if (labEl && !labEl.classList.contains('hidden')) return;
     e.preventDefault();
-    placeSelectedBlockOnce();
+    if (!placeBlockUnderPlayer()) {
+      placeSelectedBlockOnce();
+    }
   }
 });
 
@@ -1675,7 +1677,7 @@ function placeBlockUnderPlayer(){
   if (getBlock(bx, ty, bz) !== BLOCK.AIR) {
     ty = Math.floor(py);
   }
-  if (!inBounds(bx, ty, bz) || getBlock(bx, ty, bz) !== BLOCK.AIR) return;
+  if (!inBounds(bx, ty, bz) || getBlock(bx, ty, bz) !== BLOCK.AIR) return false;
   // Predict new bottom Y if we stand on top
   const newY = ty + 1 + 1e-3;
   // Only place if we can stand there without intersecting
@@ -1687,18 +1689,12 @@ function placeBlockUnderPlayer(){
     player.onGround = true;
     savePlayer();
     sfxPlace();
+    return true;
   }
+  return false;
 }
 
-// Bind V to place underfoot and pop up
-window.addEventListener('keydown', (e)=>{
-  if (e.code==='KeyV') {
-    // Do not intercept when lab is open so paste (Cmd/Ctrl+V) works in inputs
-    if (labEl && !labEl.classList.contains('hidden')) return;
-    e.preventDefault();
-    placeBlockUnderPlayer();
-  }
-});
+// Note: Removed separate V binding; B handles underfoot placement.
 
 let mouseButtons = 0;
 window.addEventListener('mousedown', (e)=>{ 
