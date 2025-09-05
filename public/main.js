@@ -837,9 +837,9 @@ float stripe(vec2 uv, float density, float speed, float angle, float width){
 void main(){
   vec2 uv = v_uv;
   uv.x *= u_aspect;
-  // Two layers: different angles and speeds
-  float l1 = stripe(uv, 45.0, 1.2, -0.9 + u_yaw*0.0, 0.06);
-  float l2 = stripe(uv*1.2 + vec2(0.12,0.0), 30.0, 1.8, -1.1 + u_yaw*0.0, 0.05);
+  // Two layers rotated by ~90 degrees
+  float l1 = stripe(uv, 40.0, 1.6, 0.07 + u_yaw*0.0, 0.045);
+  float l2 = stripe(uv*1.2 + vec2(0.12,0.0), 26.0, 2.4, 0.00 + u_yaw*0.0, 0.040);
   float rain = clamp(l1*0.7 + l2*0.5, 0.0, 1.0);
   // Dim at night slightly
   float vis = mix(0.65, 1.0, u_day);
