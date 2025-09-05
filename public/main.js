@@ -645,7 +645,8 @@ void main(){
   // Compose: fill body, then overlay rim for clear edge
   float nightDim = mix(0.30, 1.0, u_day);
   col = mix(col, bodyColor, coreNoRim * puffyStrength * nightDim);
-  col = mix(col, rimColor,  rim * min(1.0, puffyStrength + 0.2) * nightDim);
+  // Gate rim strictly by puffyStrength so disabled clouds contribute nothing
+  col = mix(col, rimColor,  rim * puffyStrength * nightDim);
 
   // Sun: disk + glow using world-anchored direction
   float cosAng = dot(dir, normalize(u_sunDir));
