@@ -1216,6 +1216,7 @@ function respawn(){
 function ensurePlayerNotStuck(){
   // If inside blocks, try moving up to find free space
   let tries = 10;
+  console.log("player pos ", player.pos);
   while (tries-- > 0 && aabbIntersectsBlock(player.pos[0], player.pos[1], player.pos[2])){
     player.pos[1] += 0.5;
   }
@@ -1345,9 +1346,6 @@ if (typeof window !== 'undefined' && window.__loadedSelectedIndex != null){
   updateSelectedLabel();
   try { delete window.__loadedSelectedIndex; } catch {}
 }
-
-// Now safe to load player (selection/UI ready). If no save, respawn to safe center.
-if (!loadPlayer()) respawn(); else ensurePlayerNotStuck();
 
 function updateCloudsLabel(){
   const names = ['No Clouds','Wispy','Both','Puffy'];
@@ -1542,6 +1540,9 @@ function moveAndCollide(dx,dy,dz){
     if (dy < 0) player.onGround = false;
   }
 }
+
+// Now safe to load player (all physics/constants ready). If no save, respawn to safe center.
+if (!loadPlayer()) respawn(); else ensurePlayerNotStuck();
 
 // Matrices
 function perspective(fovy, aspect, near, far){
