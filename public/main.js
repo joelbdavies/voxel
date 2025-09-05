@@ -1825,6 +1825,7 @@ function lookView(pos, yaw, pitch){
 let last = performance.now();
 let worldTime = 0; // seconds
 const DAY_LENGTH = 240; // seconds per full cycle (4 minutes)
+const DAY_FRACTION = 0.7; // portion of cycle spent in daytime (night = 0.3)
 // FPS counter accumulators
 let fpsAccumTime = 0;
 let fpsAccumFrames = 0;
@@ -1941,7 +1942,17 @@ function frame(now){
   let sdx, sdy, sdz, day;
   if (timeMode === 0) {
     const phase = (worldTime % DAY_LENGTH) / DAY_LENGTH; // 0..1
-    const ang = phase * Math.PI * 2; // 0..2PI
+    const rDay = Math.max(0.01, Math.min(0.99, DAY_FRACTION));
+    const rNight = 1.0 - rDay;
+    // Make day last rDay of the cycle (sun above horizon), night lasts rNight
+    let ang;
+    if (phase < rDay) {
+      const p = phase / rDay;        // 0..1 over the day arc
+      ang = p * Math.PI;             // 0..π (sunrise to sunset)
+    } else {
+      const p = (phase - rDay) / rNight; // 0..1 over the night arc
+      ang = Math.PI + p * Math.PI;       // π..2π (sunset to sunrise)
+    }
     const elev = Math.sin(ang);
     const horiz = Math.cos(ang);
     sdx = ax * horiz; sdy = elev; sdz = azz * horiz;
