@@ -1488,6 +1488,68 @@ function ensureLab64(st){
   return out;
 }
 
+function encodeLabToCode(st){
+  const s = ensureLab64(st || labState || defaultLabState());
+  const payload = {
+    v: 1,
+    name: s.name,
+    bpm: s.bpm,
+    leadWave: s.leadWave,
+    bassWave: s.bassWave,
+    lead: s.lead64,
+    bass: s.bass64,
+    hat: s.hat64,
+    kick: s.kick64,
+  };
+  return JSON.stringify(payload);
+}
+
+function decodeLabFromCode(code){
+  const data = JSON.parse(String(code||'').trim());
+  if (!data || typeof data !== 'object') throw new Error('Invalid data');
+  const st = defaultLabState();
+  st.name = data.name || st.name;
+  st.bpm = Math.max(60, Math.min(200, parseInt(data.bpm||st.bpm,10)));
+  st.leadWave = data.leadWave || st.leadWave;
+  st.bassWave = data.bassWave || st.bassWave;
+  st.lead64 = Array.isArray(data.lead) ? data.lead.slice(0,64).concat(Array(64).fill('.')).slice(0,64) : st.lead64;
+  st.bass64 = Array.isArray(data.bass) ? data.bass.slice(0,64).concat(Array(64).fill('.')).slice(0,64) : st.bass64;
+  st.hat64  = Array.isArray(data.hat)  ? data.hat.slice(0,64).concat(Array(64).fill(0)).slice(0,64) : st.hat64;
+  st.kick64 = Array.isArray(data.kick) ? data.kick.slice(0,64).concat(Array(64).fill(0)).slice(0,64) : st.kick64;
+  return st;
+}
+
+async function copyLabCode(){
+  const code = encodeLabToCode(labState);
+  try{
+    if (navigator.clipboard && navigator.clipboard.writeText){
+      await navigator.clipboard.writeText(code);
+    } else {
+      const ta = document.createElement('textarea');
+      ta.value = code; document.body.appendChild(ta); ta.select();
+      document.execCommand('copy'); document.body.removeChild(ta);
+    }
+    alert('Music copied to clipboard.');
+  }catch(e){
+    console.warn('Copy failed:', e);
+    alert('Copy failed. See console for JSON.');
+    console.log(code);
+  }
+}
+
+function promptLoadLabCode(){
+  const str = prompt('Paste music JSON:');
+  if (!str) return;
+  try{
+    const st = decodeLabFromCode(str);
+    try { labState = JSON.parse(JSON.stringify(st)); } catch { labState = st; }
+    setLabUI(labState);
+  }catch(e){
+    console.warn(e);
+    alert('Failed to load music: ' + e.message);
+  }
+}
+
 function mtofName(n){
   // Accept note names like C4, D#4, Bb3 etc.; fallback numeric
   if (typeof n === 'number') return n;
@@ -1677,6 +1739,8 @@ function toggleMusicLab(){
       // Built-in select
       const builtinSel = document.getElementById('labBuiltin');
       const btnBuiltin = document.getElementById('labBuiltinLoad');
+      const btnExport = document.getElementById('labExport');
+      const btnImport = document.getElementById('labImport');
       if (builtinSel){
         builtinSel.innerHTML = '';
         for (let i=0;i<baseTracks.length;i++){
@@ -1689,6 +1753,8 @@ function toggleMusicLab(){
           const idx = parseInt(builtinSel.value,10)||0;
           loadBuiltinToLab(idx);
         };
+        if (btnExport) btnExport.onclick = ()=> copyLabCode();
+        if (btnImport) btnImport.onclick = ()=> promptLoadLabCode();
       }
     }
     labState = ensureLab64(labState);
