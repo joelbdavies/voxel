@@ -1232,8 +1232,7 @@ function ensurePlayerNotStuck(){
     player.onGround = true;
   }
 }
-// Try load player; otherwise respawn
-if (!loadPlayer()) respawn(); else ensurePlayerNotStuck();
+// (loadPlayer moved below UI init to avoid TDZ on selection vars)
 
 // Load saved time phase or default to ~10am (sun has been up for ~4h from 6am)
 let initialTimePhase = loadTimePhase();
@@ -1346,6 +1345,9 @@ if (typeof window !== 'undefined' && window.__loadedSelectedIndex != null){
   updateSelectedLabel();
   try { delete window.__loadedSelectedIndex; } catch {}
 }
+
+// Now safe to load player (selection/UI ready). If no save, respawn to safe center.
+if (!loadPlayer()) respawn(); else ensurePlayerNotStuck();
 
 function updateCloudsLabel(){
   const names = ['No Clouds','Wispy','Both','Puffy'];
