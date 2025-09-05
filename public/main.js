@@ -1831,8 +1831,6 @@ let forwardActive = false;
 let tapCandidate = false;
 let touchStartTime = 0;
 let touchMoveAccum = 0;
-let mobileTurnLeft = false;
-let mobileTurnRight = false;
 
 function onTouchStart(ev){
   if (!IS_TOUCH) return;
@@ -1957,21 +1955,9 @@ function initMobileUI(){
   setBtnHold(btnJump, 'Space');
   setBtnHold(btnUp, 'KeyW');
   setBtnHold(btnDown, 'KeyS');
-  // Left/Right: turn instead of strafe
-  const turnOnOff = (el, setFlag)=>{
-    if (!el) return;
-    const down = ()=> setFlag(true);
-    const up = ()=> setFlag(false);
-    el.addEventListener('touchstart', (e)=>{ e.preventDefault(); down(); }, {passive:false});
-    el.addEventListener('touchend',   (e)=>{ e.preventDefault(); up(); }, {passive:false});
-    el.addEventListener('touchcancel',(e)=>{ e.preventDefault(); up(); }, {passive:false});
-    el.addEventListener('pointerdown', (e)=>{ e.preventDefault(); down(); });
-    el.addEventListener('pointerup',   (e)=>{ e.preventDefault(); up(); });
-    el.addEventListener('pointercancel',(e)=>{ e.preventDefault(); up(); });
-    el.addEventListener('mouseleave', (e)=>{ e.preventDefault(); up(); });
-  };
-  turnOnOff(btnLeft, (v)=>{ mobileTurnLeft = v; });
-  turnOnOff(btnRight, (v)=>{ mobileTurnRight = v; });
+  // Left/Right: strafe like desktop
+  setBtnHold(btnLeft, 'KeyA');
+  setBtnHold(btnRight, 'KeyD');
 
   if (btnAdd) btnAdd.addEventListener('click', (e)=>{ e.preventDefault(); placeSelectedBlockOnce(); });
   if (btnRemove) btnRemove.addEventListener('click', (e)=>{ e.preventDefault(); breakBlockOnce(); });
@@ -2044,12 +2030,6 @@ function doPlaceAt(x,y,z, hit){
 }
 
 function placeSelectedBlockOnce(){
-  // Mobile turning: adjust yaw while holding left/right buttons
-  {
-    const TURN_SPEED = 3.2; // rad/sec (snappier on mobile)
-    if (mobileTurnLeft)  player.yaw += TURN_SPEED * dt;
-    if (mobileTurnRight) player.yaw -= TURN_SPEED * dt;
-  }
   const yaw = player.yaw;
   const camPos = [player.pos[0], player.pos[1] + EYE_HEIGHT, player.pos[2]];
   const lookDir = [
