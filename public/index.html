@@ -15,8 +15,8 @@
           <div>WASD: Move, Space: Jump, Shift: Sprint</div>
           <div>Double Space: Start fly (Space/Ctrl to ascend/descend; Double Ctrl: End)</div>
           <div>C: Break, B: Place (underfoot or crosshair)</div>
-        <div>[ and ] (or Q/E): Cycle block</div>
-        <div>P: Save world (copy code), O: Load world (paste code)</div>
+          <div>[ and ] (or Q/E): Cycle block</div>
+          <div>P: Save world (copy code), O: Load world (paste code)</div>
           <div>M: Toggle music, ,/.: Prev/Next track, 1–6: Pick track</div>
           <div>K: Cycle clouds (None/Wispy/Both/Puffy)</div>
           <div>T: Toggle time (Auto/Day/Night)</div>
@@ -24,11 +24,45 @@
           <div>F3: Debug overlay</div>
           <div>R: Respawn, Esc: Unlock mouse</div>
         </div>
+        <!-- Minimal mobile HUD -->
+        <div id="brand" aria-hidden="true">Voxel Craft</div>
+        <button id="menuBtn" aria-label="Open Menu" class="hud-btn">☰</button>
+        <div id="menuPanel" class="hidden">
+          <div class="menu-header">
+            <strong>Menu</strong>
+            <button id="menuClose" class="btn">✕</button>
+          </div>
+          <div class="menu-items">
+            <button id="menuClouds" class="btn"></button>
+            <button id="menuTime" class="btn"></button>
+            <button id="menuTorch" class="btn"></button>
+            <button id="menuFxaa" class="btn"></button>
+            <button id="menuMusic" class="btn"></button>
+            <div class="row">
+              <button id="menuPrevTrack" class="btn">◀ Track</button>
+              <span id="menuTrackLabel" class="label" style="flex:1"></span>
+              <button id="menuNextTrack" class="btn">Track ▶</button>
+            </div>
+            <button id="menuFly" class="btn"></button>
+            <button id="menuRespawn" class="btn">Respawn</button>
+          </div>
+        </div>
         <div id="selected"></div>
         <div id="music"></div>
         <div id="clouds"></div>
         <div id="torch"></div>
         <div id="debug" class="hidden"></div>
+        <!-- Mobile on-screen controls -->
+        <div id="mobileControls" class="hidden">
+          <div class="mc-left">
+            <button id="btnJump" class="btn round" aria-label="Jump">⤴</button>
+          </div>
+          <div class="mc-right">
+            <button id="btnRemove" class="btn round" aria-label="Remove Block">−</button>
+            <button id="btnAdd" class="btn round" aria-label="Add Block">＋</button>
+            <button id="btnSwitch" class="btn" aria-label="Switch Block">Switch</button>
+          </div>
+        </div>
       <div id="crosshair">+</div>
     </div>
     <div id="musiclab" class="hidden">

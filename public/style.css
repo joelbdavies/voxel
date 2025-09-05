@@ -12,6 +12,7 @@ html, body {
   width: 100vw;
   height: 100vh;
   display: block;
+  touch-action: none; /* enable touch look without browser gestures */
 }
 
 #hud {
@@ -19,6 +20,81 @@ html, body {
   left: 0; right: 0; top: 0; bottom: 0;
   pointer-events: none;
 }
+
+/* Minimal brand (mobile) */
+#brand {
+  position: absolute;
+  left: 12px; top: 12px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: rgba(0,0,0,0.35);
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  pointer-events: none;
+}
+
+/* Top-right menu button */
+#menuBtn {
+  position: absolute;
+  right: 12px; top: 12px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: rgba(0,0,0,0.35);
+  color: #eaeaea;
+  border: 1px solid rgba(255,255,255,0.15);
+  pointer-events: auto;
+  cursor: pointer;
+}
+.hud-btn { pointer-events: auto; }
+
+/* Slide-down menu panel */
+#menuPanel.hidden { display: none; }
+#menuPanel {
+  position: absolute;
+  right: 12px; top: 48px;
+  width: min(320px, 90vw);
+  background: rgba(16,20,24,0.95);
+  color: #eaeaea;
+  border: 1px solid #2a2f36;
+  border-radius: 8px;
+  padding: 10px;
+  box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+  pointer-events: auto;
+}
+#menuPanel .menu-header{ display:flex; align-items:center; justify-content:space-between; margin-bottom:6px; }
+#menuPanel .menu-items .btn{ width: 100%; margin: 6px 0; }
+#menuPanel .row{ display:flex; align-items:center; gap: 8px; }
+#menuPanel .label{ opacity: 0.85; font-size: 12px; }
+
+/* Mobile on-screen controls */
+#mobileControls.hidden { display: none; }
+#mobileControls {
+  position: absolute;
+  left: 0; right: 0; bottom: 12px;
+  display: flex; align-items: flex-end; justify-content: space-between;
+  padding: 0 12px;
+  pointer-events: auto;
+}
+#mobileControls .mc-left { display:flex; gap: 10px; }
+#mobileControls .mc-right { display:flex; gap: 10px; }
+.btn.round { border-radius: 999px; width: 52px; height: 52px; display:flex; align-items:center; justify-content:center; font-size: 18px; }
+
+/* Reuse Music Lab button look for mobile controls */
+.btn { background: #1f2833; color: #eaeaea; border: 1px solid #2a2f36; padding: 8px 12px; border-radius: 6px; cursor: pointer; }
+
+/* Hide verbose overlays on touch devices */
+body.touch #instructions,
+body.touch #selected,
+body.touch #music,
+body.touch #clouds,
+body.touch #torch,
+body.touch #debug { display: none; }
+body.touch #brand,
+body.touch #menuBtn,
+body.touch #mobileControls { display: block; }
+
+/* Desktop: brand/menu/mobile controls hidden by default */
+#brand, #menuBtn, #mobileControls { display: none; }
 
 #instructions {
   position: absolute;

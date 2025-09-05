@@ -12,6 +12,10 @@ const torchEl = document.getElementById('torch');
 const debugEl = document.getElementById('debug');
 const labEl = document.getElementById('musiclab');
 
+// Touch/mobile detection
+const IS_TOUCH = (('ontouchstart' in window) || (navigator.maxTouchPoints>0) || (window.matchMedia && matchMedia('(pointer: coarse)').matches));
+try { if (IS_TOUCH) document.body.classList.add('touch'); } catch {}
+
 // --- Audio (8-bit SFX + music) ---
 let audioCtx = null;
 let masterGain, sfxGain, musicGain;
@@ -1687,6 +1691,8 @@ updateTorchLabel();
 updateMusicLabel();
 // If flight was persisted, ensure consistent state
 if (flyMode) { try { player.onGround = false; player.vel[1] = 0; } catch(e){} }
+// Initialize mobile UI (buttons + menu) if touch
+initMobileUI();
 window.addEventListener('keydown', (e)=>{
   if (e.code==='F3') {
     e.preventDefault();
@@ -1802,6 +1808,64 @@ function onMouseMove(e){
   if (player.pitch < -lim) player.pitch = -lim;
 }
 
+// --- Touch look + hold-to-move (mobile) ---
+let touchActive = false;
+let lastTouchX = 0, lastTouchY = 0;
+let forwardTimer = null;
+let forwardActive = false;
+let tapCandidate = false;
+let touchStartTime = 0;
+let touchMoveAccum = 0;
+
+function onTouchStart(ev){
+  if (!IS_TOUCH) return;
+  if (labEl && !labEl.classList.contains('hidden')) return;
+  const t = ev.touches[0]; if (!t) return;
+  ev.preventDefault();
+  touchActive = true; tapCandidate = true; touchMoveAccum = 0; touchStartTime = performance.now();
+  lastTouchX = t.clientX; lastTouchY = t.clientY;
+  // Start forward after a short hold to allow tap interactions
+  clearTimeout(forwardTimer);
+  forwardTimer = setTimeout(()=>{
+    forwardActive = true; keys.add('KeyW');
+  }, 180);
+}
+function onTouchMove(ev){
+  if (!IS_TOUCH || !touchActive) return;
+  const t = ev.touches[0]; if (!t) return;
+  ev.preventDefault();
+  const dx = t.clientX - lastTouchX;
+  const dy = t.clientY - lastTouchY;
+  lastTouchX = t.clientX; lastTouchY = t.clientY;
+  touchMoveAccum += Math.hypot(dx, dy);
+  if (touchMoveAccum > 6) tapCandidate = false;
+  const sensitivity = 0.0040; // a bit higher for touch
+  player.yaw -= dx * sensitivity;
+  player.pitch -= dy * sensitivity;
+  const lim = Math.PI/2 - 0.01;
+  if (player.pitch > lim) player.pitch = lim;
+  if (player.pitch < -lim) player.pitch = -lim;
+}
+function endForward(){ if (forwardActive) { keys.delete('KeyW'); forwardActive=false; } }
+function onTouchEnd(ev){
+  if (!IS_TOUCH) return;
+  ev.preventDefault();
+  clearTimeout(forwardTimer);
+  if (touchActive){
+    const dt = performance.now() - touchStartTime;
+    if (!forwardActive && tapCandidate && dt < 200){
+      // Short tap = interact: remove block under crosshair
+      breakBlockOnce();
+    }
+  }
+  endForward();
+  touchActive = false;
+}
+canvas.addEventListener('touchstart', onTouchStart, { passive:false });
+canvas.addEventListener('touchmove', onTouchMove, { passive:false });
+canvas.addEventListener('touchend', onTouchEnd, { passive:false });
+canvas.addEventListener('touchcancel', onTouchEnd, { passive:false });
+
 // Block selection and actions
 const placeOptions = [
   { type:'block', id: BLOCK.GRASS, name:'Grass' },
@@ -1826,6 +1890,76 @@ if (typeof window !== 'undefined' && window.__loadedSelectedIndex != null){
   selectedIndex = ((window.__loadedSelectedIndex|0)%placeOptions.length + placeOptions.length)%placeOptions.length;
   updateSelectedLabel();
   try { delete window.__loadedSelectedIndex; } catch {}
+}
+
+// --- Mobile UI (buttons + menu) ---
+function initMobileUI(){
+  if (!IS_TOUCH) return;
+  // Show controls container
+  const mc = document.getElementById('mobileControls');
+  if (mc) mc.classList.remove('hidden');
+  const btnJump = document.getElementById('btnJump');
+  const btnAdd = document.getElementById('btnAdd');
+  const btnRemove = document.getElementById('btnRemove');
+  const btnSwitch = document.getElementById('btnSwitch');
+  const menuBtn = document.getElementById('menuBtn');
+  const menuClose = document.getElementById('menuClose');
+  const panel = document.getElementById('menuPanel');
+  const mClouds = document.getElementById('menuClouds');
+  const mTime = document.getElementById('menuTime');
+  const mTorch = document.getElementById('menuTorch');
+  const mFxaa = document.getElementById('menuFxaa');
+  const mMusic = document.getElementById('menuMusic');
+  const mPrevTr = document.getElementById('menuPrevTrack');
+  const mNextTr = document.getElementById('menuNextTrack');
+  const mTrackLabel = document.getElementById('menuTrackLabel');
+  const mFly = document.getElementById('menuFly');
+  const mRespawn = document.getElementById('menuRespawn');
+
+  const setBtnHold = (el, code)=>{
+    if (!el) return;
+    el.addEventListener('touchstart', (e)=>{ e.preventDefault(); keys.add(code); }, {passive:false});
+    el.addEventListener('touchend',   (e)=>{ e.preventDefault(); keys.delete(code); }, {passive:false});
+    el.addEventListener('touchcancel',(e)=>{ e.preventDefault(); keys.delete(code); }, {passive:false});
+    el.addEventListener('mousedown', (e)=>{ e.preventDefault(); keys.add(code); });
+    el.addEventListener('mouseup',   (e)=>{ e.preventDefault(); keys.delete(code); });
+    el.addEventListener('mouseleave',(e)=>{ e.preventDefault(); keys.delete(code); });
+  };
+  setBtnHold(btnJump, 'Space');
+
+  if (btnAdd) btnAdd.addEventListener('click', (e)=>{ e.preventDefault(); placeSelectedBlockOnce(); });
+  if (btnRemove) btnRemove.addEventListener('click', (e)=>{ e.preventDefault(); breakBlockOnce(); });
+  if (btnSwitch) btnSwitch.addEventListener('click', (e)=>{
+    e.preventDefault();
+    selectedIndex = (selectedIndex+1)%placeOptions.length; updateSelectedLabel(); savePlayer();
+  });
+
+  function updateMenuLabels(){
+    const cloudNames = ['None','Wispy','Both','Puffy'];
+    if (mClouds) mClouds.textContent = `Clouds: ${cloudNames[cloudMode]}`;
+    const timeNames = ['Auto','Day','Night'];
+    if (mTime) mTime.textContent = `Time: ${timeNames[timeMode]}`;
+    if (mTorch) mTorch.textContent = `Torch: ${torchEnabled? 'On':'Off'}`;
+    if (mFxaa) mFxaa.textContent = `FXAA: ${fxaaEnabled? 'On':'Off'}`;
+    if (mMusic) mMusic.textContent = `Music: ${musicEnabled? 'On':'Off'}`;
+    const tr = (tracks && tracks[currentTrackIndex]) || {name:'', bpm:DEFAULT_BPM};
+    if (mTrackLabel) mTrackLabel.textContent = `Track ${Math.min(currentTrackIndex+1, tracks.length)}/${tracks.length} ${tr.name}`;
+    if (mFly) mFly.textContent = `Fly: ${flyMode? 'On':'Off'}`;
+  }
+  function openMenu(){ if (panel) panel.classList.remove('hidden'); updateMenuLabels(); }
+  function closeMenu(){ if (panel) panel.classList.add('hidden'); }
+  if (menuBtn) menuBtn.addEventListener('click', (e)=>{ e.preventDefault(); openMenu(); });
+  if (menuClose) menuClose.addEventListener('click', (e)=>{ e.preventDefault(); closeMenu(); });
+  // Menu actions
+  if (mClouds) mClouds.addEventListener('click', (e)=>{ e.preventDefault(); cloudMode=(cloudMode+1)&3; saveSettings(); updateMenuLabels(); });
+  if (mTime) mTime.addEventListener('click', (e)=>{ e.preventDefault(); timeMode=(timeMode+1)%3; saveSettings(); updateMenuLabels(); });
+  if (mTorch) mTorch.addEventListener('click', (e)=>{ e.preventDefault(); torchEnabled=!torchEnabled; updateTorchLabel(); saveSettings(); updateMenuLabels(); });
+  if (mFxaa) mFxaa.addEventListener('click', (e)=>{ e.preventDefault(); fxaaEnabled=!fxaaEnabled; saveSettings(); updateMenuLabels(); });
+  if (mMusic) mMusic.addEventListener('click', (e)=>{ e.preventDefault(); initAudio(); resumeAudio(); musicEnabled=!musicEnabled; if(musicEnabled) startMusic(); else stopMusic(); saveSettings(); updateMenuLabels(); });
+  if (mPrevTr) mPrevTr.addEventListener('click', (e)=>{ e.preventDefault(); setTrack(currentTrackIndex-1); updateMenuLabels(); });
+  if (mNextTr) mNextTr.addEventListener('click', (e)=>{ e.preventDefault(); setTrack(currentTrackIndex+1); updateMenuLabels(); });
+  if (mFly) mFly.addEventListener('click', (e)=>{ e.preventDefault(); flyMode=!flyMode; if(!flyMode){ player.vel[1]=0; } saveSettings(); updateMenuLabels(); });
+  if (mRespawn) mRespawn.addEventListener('click', (e)=>{ e.preventDefault(); respawn(); closeMenu(); });
 }
 
 function updateCloudsLabel(){
