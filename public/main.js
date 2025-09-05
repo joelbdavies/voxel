@@ -1212,7 +1212,6 @@ function respawn(){
   }
   player.pos = [sx+0.5, sy, sz+0.5];
   player.vel = [0,0,0];
-  savePlayer();
 }
 function ensurePlayerNotStuck(){
   // If inside blocks, try moving up to find free space
@@ -1221,7 +1220,16 @@ function ensurePlayerNotStuck(){
     player.pos[1] += 0.5;
   }
   if (aabbIntersectsBlock(player.pos[0], player.pos[1], player.pos[2])){
-    respawn();
+    // As a fallback, keep XZ and place player on top surface at current XZ
+    const px = Math.floor(player.pos[0]);
+    const pz = Math.floor(player.pos[2]);
+    let yTop = WORLD_H - 2;
+    for (let y=WORLD_H-2; y>=0; y--){
+      if (getBlock(px,y,pz)!==BLOCK.AIR){ yTop = y+2; break; }
+    }
+    player.pos[1] = yTop + 1e-3;
+    player.vel[1] = 0;
+    player.onGround = true;
   }
 }
 // Try load player; otherwise respawn
