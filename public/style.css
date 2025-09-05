@@ -83,6 +83,12 @@ html, body {
 #musiclab .label { margin-bottom: 6px; opacity: 0.8; }
 #musiclab .grid { display: grid; grid-template-columns: repeat(16, minmax(0, 1fr)); gap: 4px; }
 #musiclab .grid-bool { display: grid; grid-template-columns: repeat(16, 1fr); gap: 4px; }
+#musiclab .roll { display:grid; grid-template-columns: 36px repeat(16, 1fr); gap: 2px; user-select:none; }
+#musiclab .roll .cell { height: 14px; background:#0e1216; border:1px solid #20262e; border-radius:2px; cursor:pointer; }
+#musiclab .roll .cell.black { background:#0b0f13; }
+#musiclab .roll .cell.active { background:#2e6bd1; border-color:#2e6bd1; }
+#musiclab .roll .key { height: 14px; display:flex; align-items:center; justify-content:flex-end; padding: 0 6px; font-size: 11px; color:#cfd7df; background:#0e1216; border:1px solid #20262e; border-radius:2px; cursor:default; }
+#musiclab .roll .key.black { background:#0b0f13; }
 #musiclab select, #musiclab input[type="text"], #musiclab input[type="number"] { background: #0c0f12; color: #eaeaea; border: 1px solid #2a2f36; border-radius: 4px; padding: 4px; }
 #musiclab input[type="checkbox"] { width: 18px; height: 18px; }
 #musiclab .btn { background: #1f2833; color: #eaeaea; border: 1px solid #2a2f36; padding: 6px 10px; border-radius: 4px; cursor: pointer; }

@@ -1506,6 +1506,7 @@ function midiToName(m){
 }
 
 function buildGrid(selectContainer, initial){
+  // legacy select-based grid (unused after roll migration)
   selectContainer.textContent='';
   const notes = ['.', 'C3','D3','E3','F3','G3','A3','B3','C4','D4','E4','F4','G4','A4','B4','C5','D5','E5'];
   for (let i=0;i<16;i++){
@@ -1515,6 +1516,70 @@ function buildGrid(selectContainer, initial){
     }
     sel.value = initial[i] || '.';
     selectContainer.appendChild(sel);
+  }
+}
+
+function chromaticRange(fromName, toName){
+  const from = mtofName(fromName);
+  const to = mtofName(toName);
+  const start = Math.min(from, to);
+  const end = Math.max(from, to);
+  const out = [];
+  for (let m = end; m >= start; m--){ // descending so higher pitches at top
+    out.push(midiToName(m));
+  }
+  return out;
+}
+
+function buildRoll(container, initial, trackKey){
+  // initial: 16-length array of note names or '.'
+  container.textContent = '';
+  container.dataset.track = trackKey;
+  const blackSet = new Set([1,3,6,8,10]); // semitone indices for black keys
+  // Determine dynamic range based on used notes in this 16-step slice
+  const used = [];
+  for (let i=0;i<16;i++){
+    const n = initial[i];
+    const m = mtofName(n);
+    if (typeof m === 'number' && isFinite(m)) used.push(m);
+  }
+  let start, end;
+  if (used.length){
+    let min = Math.min(...used), max = Math.max(...used);
+    // add small padding
+    min -= 2; max += 2;
+    // ensure at least ~2 octaves for context
+    if ((max - min) < 24){
+      const center = Math.round((min + max)/2);
+      min = center - 12; max = center + 12;
+    }
+    start = min; end = max;
+  } else {
+    start = mtofName('C3'); end = mtofName('E5');
+  }
+  const notes = [];
+  for (let m = Math.round(end); m >= Math.round(start); m--) notes.push(midiToName(m));
+  // Precompute which columns are active per note
+  const activeByCol = new Array(16).fill('.');
+  for (let i=0;i<16;i++) activeByCol[i] = initial[i] || '.';
+  // Create rows (notes) x columns (steps)
+  for (let r=0; r<notes.length; r++){
+    const noteName = notes[r];
+    const midi = mtofName(noteName) || 0;
+    const semi = ((midi % 12) + 12) % 12;
+    // left keyboard key/label
+    const key = document.createElement('div');
+    key.className = 'key' + (blackSet.has(semi) ? ' black' : '');
+    key.textContent = noteName;
+    container.appendChild(key);
+    for (let c=0; c<16; c++){
+      const cell = document.createElement('div');
+      cell.className = 'cell' + (blackSet.has(semi) ? ' black' : '');
+      cell.dataset.idx = String(c);
+      cell.dataset.note = noteName;
+      if (activeByCol[c] === noteName) cell.classList.add('active');
+      container.appendChild(cell);
+    }
   }
 }
 function buildBoolGrid(container, initial){
@@ -1550,8 +1615,8 @@ function renderLabPage(){
   const bassSlice = labState.bass64.slice(pageOff, pageOff+16);
   const hatSlice  = labState.hat64.slice(pageOff, pageOff+16);
   const kickSlice = labState.kick64.slice(pageOff, pageOff+16);
-  buildGrid(document.getElementById('leadGrid'), leadSlice);
-  buildGrid(document.getElementById('bassGrid'), bassSlice);
+  buildRoll(document.getElementById('leadGrid'), leadSlice, 'lead64');
+  buildRoll(document.getElementById('bassGrid'), bassSlice, 'bass64');
   buildBoolGrid(document.getElementById('hatGrid'), hatSlice);
   buildBoolGrid(document.getElementById('kickGrid'), kickSlice);
   // reattach live handlers for the new elements
@@ -1649,8 +1714,24 @@ function attachLabLiveHandlers(){
   bpmEl.oninput = ()=>{ labState.bpm = Math.max(60, Math.min(200, parseInt(bpmEl.value,10)||128)); };
   leadWaveEl.onchange = ()=>{ labState.leadWave = leadWaveEl.value; };
   bassWaveEl.onchange = ()=>{ labState.bassWave = bassWaveEl.value; };
-  leadGrid.onchange = (e)=>{ if (e.target.tagName==='SELECT'){ const i=+e.target.dataset.idx; labState.lead64[labPage*16+i]=e.target.value; } };
-  bassGrid.onchange = (e)=>{ if (e.target.tagName==='SELECT'){ const i=+e.target.dataset.idx; labState.bass64[labPage*16+i]=e.target.value; } };
+  const handleRollClick = (container)=> (e)=>{
+    const cell = e.target.closest('.cell');
+    if (!cell || !container.contains(cell)) return;
+    const idx = parseInt(cell.dataset.idx, 10);
+    const note = cell.dataset.note;
+    const track = container.dataset.track;
+    const off = labPage*16 + idx;
+    const cur = (labState[track] && labState[track][off]) || '.';
+    const next = (cur === note) ? '.' : note;
+    // Update state
+    if (Array.isArray(labState[track])) labState[track][off] = next;
+    // Update UI: clear active in the column, then set if needed
+    const cells = container.querySelectorAll(`.cell[data-idx="${idx}"]`);
+    cells.forEach(n => n.classList.remove('active'));
+    if (next !== '.') cell.classList.add('active');
+  };
+  leadGrid.onclick = handleRollClick(leadGrid);
+  bassGrid.onclick = handleRollClick(bassGrid);
   hatGrid.onchange = (e)=>{ if (e.target.type==='checkbox'){ const i=+e.target.dataset.idx; labState.hat64[labPage*16+i]=e.target.checked?1:0; } };
   kickGrid.onchange = (e)=>{ if (e.target.type==='checkbox'){ const i=+e.target.dataset.idx; labState.kick64[labPage*16+i]=e.target.checked?1:0; } };
 }
@@ -1690,14 +1771,15 @@ function loadBuiltinToLab(idx){
   for (let i=0;i<64;i++){
     const lm = tr.lead && tr.lead[i];
     const bm = tr.bass && tr.bass[i];
-    st.lead64[i] = (lm!=null) ? midiToName(lm) : '.';
-    st.bass64[i] = (bm!=null) ? midiToName(bm) : '.';
+    // Treat 0 or falsy as rest; some built-ins use 0 for rests
+    st.lead64[i] = (typeof lm === 'number' ? (lm>0? midiToName(lm) : '.') : (lm!=null? midiToName(lm) : '.'));
+    st.bass64[i] = (typeof bm === 'number' ? (bm>0? midiToName(bm) : '.') : (bm!=null? midiToName(bm) : '.'));
   }
   st.hat64 = tr.hat16 ? repeat16to64(tr.hat16) : defaultLabState().hat64;
   st.kick64 = tr.kick16 ? repeat16to64(tr.kick16) : defaultLabState().kick64;
-  // Apply to UI and state
-  setLabUI(st);
+  // Apply to state then UI (UI reads from labState)
   try { labState = JSON.parse(JSON.stringify(st)); } catch { labState = st; }
+  setLabUI(labState);
 }
 
 function repeat16to64(arr16, mapFn){
