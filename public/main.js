@@ -1548,8 +1548,89 @@ function decodeLabFromCode(code){
   return st;
 }
 
+// Full bank (all slots) export/import
+function normalizeSlot(st){
+  if (!st) return null;
+  const s = ensureLab64(st);
+  return {
+    name: s.name,
+    bpm: Math.max(60, Math.min(200, s.bpm||128)),
+    leadWave: s.leadWave || 'square',
+    bassWave: s.bassWave || 'triangle',
+    lead64: s.lead64.slice(0,64),
+    bass64: s.bass64.slice(0,64),
+    hat64: s.hat64.slice(0,64),
+    kick64: s.kick64.slice(0,64),
+  };
+}
+
+function encodeAllLabToCode(){
+  const bank = loadBank();
+  const slotSel = document.getElementById('labSlot');
+  const selected = slotSel ? (parseInt(slotSel.value,10)||0) : 0;
+  const payload = {
+    v: 2,
+    selected,
+    slots: new Array(16).fill(null).map((_,i)=> normalizeSlot(bank[i]))
+  };
+  return JSON.stringify(payload);
+}
+
+function decodeAllLabFromCode(code){
+  const data = JSON.parse(String(code||'').trim());
+  if (!data || typeof data !== 'object') throw new Error('Invalid data');
+  if (Array.isArray(data.slots)){
+    const incoming = data.slots;
+    const bank = new Array(16).fill(null);
+    for (let i=0;i<16;i++){
+      const s = incoming[i];
+      if (s && typeof s==='object'){
+        const st = defaultLabState();
+        st.name = s.name || st.name;
+        st.bpm = Math.max(60, Math.min(200, parseInt(s.bpm||st.bpm,10)));
+        st.leadWave = s.leadWave || st.leadWave;
+        st.bassWave = s.bassWave || st.bassWave;
+        const leadArr = s.lead64 || s.lead || [];
+        const bassArr = s.bass64 || s.bass || [];
+        const hatArr  = s.hat64  || s.hat  || [];
+        const kickArr = s.kick64 || s.kick || [];
+        st.lead64 = Array.isArray(leadArr) ? leadArr.slice(0,64).concat(Array(64).fill('.')).slice(0,64) : st.lead64;
+        st.bass64 = Array.isArray(bassArr) ? bassArr.slice(0,64).concat(Array(64).fill('.')).slice(0,64) : st.bass64;
+        st.hat64  = Array.isArray(hatArr)  ? hatArr.slice(0,64).concat(Array(64).fill(0)).slice(0,64) : st.hat64;
+        st.kick64 = Array.isArray(kickArr) ? kickArr.slice(0,64).concat(Array(64).fill(0)).slice(0,64) : st.kick64;
+        bank[i] = st;
+      } else {
+        bank[i] = null;
+      }
+    }
+    saveBank(bank);
+    rebuildTracksFromBank();
+    const slotSel = document.getElementById('labSlot');
+    const sel = Math.max(0, Math.min(15, parseInt(data.selected||0,10)||0));
+    if (slotSel){ slotSel.value = String(sel); }
+    // choose state to show
+    let st = bank[sel];
+    if (!st){
+      for (let i=0;i<16;i++){ if (bank[i]) { st = bank[i]; if (slotSel) slotSel.value=String(i); break; } }
+    }
+    st = ensureLab64(st || defaultLabState());
+    try { labState = JSON.parse(JSON.stringify(st)); } catch { labState = st; }
+    setLabUI(labState);
+    refreshLabSlotNames();
+    updateMusicLabel();
+    return 'bank';
+  } else {
+    // Fallback: single-track JSON
+    const st = decodeLabFromCode(data);
+    try { labState = JSON.parse(JSON.stringify(st)); } catch { labState = st; }
+    setLabUI(labState);
+    saveCurrentLabToSelectedSlot();
+    return 'single';
+  }
+}
+
 async function copyLabCode(){
-  const code = encodeLabToCode(labState);
+  const code = encodeAllLabToCode();
   try{
     if (navigator.clipboard && navigator.clipboard.writeText){
       await navigator.clipboard.writeText(code);
@@ -1572,10 +1653,8 @@ function promptLoadLabCode(){
   const str = prompt('Paste music JSON:');
   if (!str){ setLabStatus('Import cancelled'); startLabPreview(); return; }
   try{
-    const st = decodeLabFromCode(str);
-    try { labState = JSON.parse(JSON.stringify(st)); } catch { labState = st; }
-    setLabUI(labState);
-    setLabStatus('Music loaded');
+    const kind = decodeAllLabFromCode(str);
+    setLabStatus(kind==='bank' ? 'All slots loaded' : 'Music loaded');
   }catch(e){
     console.warn(e);
     setLabStatus('Failed to load music');
@@ -1736,6 +1815,19 @@ function saveBank(bank){
   try{ localStorage.setItem(BANK_KEY, JSON.stringify(bank)); }catch(e){}
 }
 
+function saveCurrentLabToSelectedSlot(){
+  const slotSel = document.getElementById('labSlot');
+  if (!slotSel) return;
+  const bank = loadBank();
+  const i = parseInt(slotSel.value,10)||0;
+  bank[i] = ensureLab64(getLabUI());
+  saveBank(bank);
+  rebuildTracksFromBank();
+  refreshLabSlotNames();
+  updateMusicLabel();
+  setLabStatus(`Saved to Slot ${i+1}`);
+}
+
 function toggleMusicLab(){
   const hidden = labEl.classList.toggle('hidden');
   if (!hidden){
@@ -1803,10 +1895,8 @@ function toggleMusicLab(){
         if (modalCancel) modalCancel.onclick = ()=>{ if (modal) modal.classList.add('hidden'); startLabPreview(); };
         if (modalLoad) modalLoad.onclick = ()=>{
           try{
-            const st = decodeLabFromCode(modalText.value||'');
-            try { labState = JSON.parse(JSON.stringify(st)); } catch { labState = st; }
-            setLabUI(labState);
-            setLabStatus('Music loaded');
+            const kind = decodeAllLabFromCode(modalText.value||'');
+            setLabStatus(kind==='bank' ? 'All slots loaded' : 'Music loaded');
           }catch(e){ console.warn(e); setLabStatus('Failed to load music'); }
           if (modal) modal.classList.add('hidden');
           stopLabPreview();
@@ -1872,12 +1962,19 @@ function refreshLabSlotNames(){
   for (let i=0;i<16;i++){
     const name = (bank[i] && bank[i].name) ? String(bank[i].name) : 'Empty';
     const txt = `${i+1}: ${name.length>maxLen ? name.slice(0,maxLen-1)+'…' : name}`;
-    if (slotSel.options[i]) slotSel.options[i].textContent = txt;
+    if (slotSel.options[i]){
+      // Update displayed label robustly across browsers
+      slotSel.options[i].text = txt;
+      slotSel.options[i].label = txt;
+      slotSel.options[i].textContent = txt;
+    }
     else {
       const opt = document.createElement('option');
       opt.value = String(i); opt.textContent = txt; slotSel.appendChild(opt);
     }
   }
+  // Nudge select to ensure the UI reflects any text updates for the selected option
+  slotSel.selectedIndex = slotSel.selectedIndex;
 }
 
 // Hook up bar nav buttons
