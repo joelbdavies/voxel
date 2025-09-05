@@ -36,7 +36,7 @@ function initAudio(){
   masterGain.gain.value = 0.9;
   masterGain.connect(audioCtx.destination);
   sfxGain = audioCtx.createGain();
-  sfxGain.gain.value = 0.35;
+  sfxGain.gain.value = 0.35; // revert: keep global SFX balanced
   sfxGain.connect(masterGain);
   musicGain = audioCtx.createGain();
   musicGain.gain.value = 0.18;
@@ -74,7 +74,7 @@ function playTone({type='square', freq=440, dur=0.08, vol=1.0, slideTo=null, sli
   osc.stop(t + dur + 0.1);
 }
 
-function playNoise({dur=0.06, vol=0.4, type='highpass', cutoff=600, q=0}){
+function playNoise({dur=0.06, vol=0.4, type='highpass', cutoff=600, q=0, sustain=0.15, attack=0.001, decay=0.03, release=0.05}){
   if (!audioCtx || !sfxEnabled) return;
   const t = audioCtx.currentTime;
   const bufferSize = Math.max(1, Math.floor(audioCtx.sampleRate * dur));
@@ -85,7 +85,7 @@ function playNoise({dur=0.06, vol=0.4, type='highpass', cutoff=600, q=0}){
   src.buffer = buffer;
   const g = audioCtx.createGain();
   g.gain.value = 0.0001;
-  envGain(g, t, 0.001, 0.03, 0.15*vol, 0.05, dur);
+  envGain(g, t, attack, decay, sustain*vol, release, dur);
   let out = g;
   if (type){
     const biq = audioCtx.createBiquadFilter();
@@ -103,7 +103,12 @@ function playNoise({dur=0.06, vol=0.4, type='highpass', cutoff=600, q=0}){
 function mixSfx(){ return sfxGain || audioCtx.destination; }
 function mixMusic(){ return musicGain || audioCtx.destination; }
 
-function sfxBreak(){ playNoise({dur:0.07, vol:0.55, type:'bandpass', cutoff:900, q:0.8}); }
+function sfxBreak(){
+  // Layered crunch: mid band + bright hiss + click
+  playNoise({dur:0.09, vol:1.0, type:'bandpass', cutoff:1300, q:1.2, sustain:0.5, attack:0.001, decay:0.02, release:0.06});
+  playNoise({dur:0.035, vol:0.7, type:'highpass', cutoff:3000, q:0.0, sustain:0.35, attack:0.0005, decay:0.01, release:0.03});
+  playTone({type:'square', freq:1200, slideTo:800, slideTime:0.02, dur:0.025, vol:0.35});
+}
 function sfxPlace(){ playTone({type:'square', freq:680, slideTo:420, slideTime:0.05, dur:0.08, vol:0.7}); }
 function sfxJump(){ playTone({type:'square', freq:380, slideTo:760, slideTime:0.10, dur:0.12, vol:0.6}); }
 function sfxStep(){ playNoise({dur:0.03, vol:0.25, type:'highpass', cutoff:700}); }
@@ -123,29 +128,23 @@ function pattern(...rows){
 }
 
 // Exact original single-track patterns (preserve rests)
-const leadPatternOriginal = [
-  76, , 79, , 81, , 79, , 76, , 79, , 81, , 84, ,
-  76, , 79, , 81, , 83, , 81, , 79, , 76, , 72, ,
-  74, , 77, , 79, , 77, , 74, , 77, , 79, , 81, ,
-  74, , 77, , 79, , 81, , 79, , 77, , 74, , 71, ,
-];
-const bassPatternOriginal = [
-  45, , , , 45, , , , 41, , , , 41, , , ,
-  43, , , , 43, , , , 47, , , , 47, , , ,
-  41, , , , 41, , , , 38, , , , 38, , , ,
-  40, , , , 40, , , , 47, , , , 47, , , ,
-];
-
-// Debug: ensure original pattern lengths are as expected
-console.log('[Track1] leadPatternOriginal.length =', leadPatternOriginal.length,
-            'bassPatternOriginal.length =', bassPatternOriginal.length);
+// (Track patterns follow)
 
 const tracks = [
   {
     name: 'Upbeat Meadow', bpm: 128,
-    // Custom handling for track 1 (use original arrays below)
-    lead: null,
-    bass: null,
+    lead: pattern(
+      [76,,79,,81,,79,, 76,,79,,81,,84,,],
+      [76,,79,,81,,83,, 81,,79,,76,,72,,],
+      [74,,77,,79,,77,, 74,,77,,79,,81,,],
+      [74,,77,,79,,81,, 79,,77,,74,,71,,],
+    ),
+    bass: pattern(
+      [45, , , , 45, , , , 41, , , , 41, , , ,],
+      [43, , , , 43, , , , 47, , , , 47, , , ,],
+      [41, , , , 41, , , , 38, , , , 38, , , ,],
+      [40, , , , 40, , , , 47, , , , 47, , , ,],
+    ),
   },
   {
     name: 'Upbeat Meadow v2', bpm: 128,
@@ -239,8 +238,8 @@ const tracks = [
   },
 ];
 
-// Debug: log lead/bass lengths for pattern-based tracks (exclude Track 1)
-for (let i = 1; i < tracks.length; i++) {
+// Debug: log lead/bass lengths for all tracks
+for (let i=0;i<tracks.length;i++){
   const tr = tracks[i];
   if (!tr || !tr.lead || !tr.bass) continue;
   console.log(`[Track ${i+1}] ${tr.name} lead.length =`, tr.lead.length, 'bass.length =', tr.bass.length);
@@ -249,63 +248,14 @@ for (let i = 1; i < tracks.length; i++) {
 
 function updateMusicTiming(){
   const tr = tracks[currentTrackIndex];
-  BPM = (currentTrackIndex===0) ? DEFAULT_BPM : (tr && tr.bpm ? tr.bpm : DEFAULT_BPM);
+  BPM = (tr && tr.bpm ? tr.bpm : DEFAULT_BPM);
   SEC_PER_BEAT = 60 / BPM;
-  STEP = SEC_PER_BEAT / 4; // 16th grid for all tracks (Track 1 matches original exactly)
+  STEP = SEC_PER_BEAT / 4; // 16th grid
 }
 
 function scheduleStep(time, step){
   const tr = tracks[currentTrackIndex];
-  // Track 1: use original arrays (exact match to the old behavior)
-  if (currentTrackIndex === 0){
-    const l0 = leadPatternOriginal[step % leadPatternOriginal.length];
-    if (l0){
-      const o = audioCtx.createOscillator();
-      o.type = 'square';
-      o.frequency.value = mtof(l0);
-      const g = audioCtx.createGain();
-      g.gain.value = 0.0001;
-      envGain(g, time, 0.002, 0.06, 0.25, 0.05, STEP*0.9);
-      o.connect(g).connect(mixMusic());
-      o.start(time);
-      o.stop(time + STEP*0.95);
-    }
-    const b0 = bassPatternOriginal[step % bassPatternOriginal.length];
-    if (b0){
-      const o = audioCtx.createOscillator();
-      o.type = 'triangle';
-      o.frequency.value = mtof(b0);
-      const g = audioCtx.createGain();
-      g.gain.value = 0.0001;
-      envGain(g, time, 0.002, 0.05, 0.2, 0.08, STEP);
-      o.connect(g).connect(mixMusic());
-      o.start(time);
-      o.stop(time + STEP);
-    }
-    // hat and kick remain grid-based
-    if (step % 2 === 1){
-      const t = time;
-      const bufferSize = Math.max(1, Math.floor(audioCtx.sampleRate * 0.02));
-      const buffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
-      const data = buffer.getChannelData(0);
-      for (let i=0;i<bufferSize;i++) data[i] = Math.random()*2-1;
-      const src = audioCtx.createBufferSource(); src.buffer = buffer;
-      const hp = audioCtx.createBiquadFilter(); hp.type='highpass'; hp.frequency.value=3000;
-      const g = audioCtx.createGain(); g.gain.value=0.0001; envGain(g, t, 0.001, 0.01, 0.12, 0.03, 0.02);
-      src.connect(hp).connect(g).connect(mixMusic()); src.start(t);
-    }
-    if (step % 4 === 0){
-      const o = audioCtx.createOscillator(); o.type='sine';
-      const g = audioCtx.createGain(); g.gain.value=0.0001;
-      o.frequency.setValueAtTime(110, time);
-      o.frequency.exponentialRampToValueAtTime(48, time+0.12);
-      envGain(g, time, 0.001, 0.05, 0.3, 0.06, 0.15);
-      o.connect(g).connect(mixMusic()); o.start(time); o.stop(time+0.18);
-    }
-    return;
-  }
-  // Other tracks: use per‑track arrays; index by bar step to keep parts aligned
-  const idx = step % SONG_STEPS;
+  const idx = step % SONG_STEPS; // lock parts to the bar length
   const l = tr.lead[idx];
   if (l){
     const o = audioCtx.createOscillator();
@@ -318,7 +268,6 @@ function scheduleStep(time, step){
     o.start(time);
     o.stop(time + STEP*0.95);
   }
-  // bass
   const b = tr.bass[idx];
   if (b){
     const o = audioCtx.createOscillator();
