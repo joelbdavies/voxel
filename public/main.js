@@ -710,6 +710,7 @@ const blocks = new Uint8Array(WORLD_W * WORLD_H * WORLD_D); // 0=air, >0 block i
 // --- Persistence (localStorage) ---
 const STORAGE_KEY = 'voxel_world_v1';
 const PLAYER_KEY = 'voxel_player_v1';
+const TIME_KEY = 'voxel_time_phase_v1'; // stores phase in [0,1)
 
 function bytesToBase64(bytes){
   let binary = '';
@@ -949,16 +950,34 @@ function loadWorld(){
   }
 }
 
+// Time persistence (store phase in [0,1))
+function saveTimePhase(){
+  try {
+    const phase = (worldTime % DAY_LENGTH) / DAY_LENGTH;
+    localStorage.setItem(TIME_KEY, JSON.stringify({ phase }));
+  } catch (e) { console.warn('Failed saving time:', e); }
+}
+function loadTimePhase(){
+  try {
+    const s = localStorage.getItem(TIME_KEY);
+    if (!s) return null;
+    const obj = JSON.parse(s);
+    const p = Number(obj.phase);
+    if (Number.isFinite(p) && p >= 0 && p < 1) return p;
+    return null;
+  } catch (e) { console.warn('Failed loading time:', e); return null; }
+}
+
 let saveTimer = null;
 function scheduleSave(){
   if (saveTimer) clearTimeout(saveTimer);
   saveTimer = setTimeout(saveWorld, 1000);
 }
-window.addEventListener('beforeunload', ()=>{ saveWorld(); savePlayer(); });
+window.addEventListener('beforeunload', ()=>{ saveWorld(); savePlayer(); saveTimePhase(); });
 document.addEventListener('visibilitychange', ()=>{
   if (document.visibilityState === 'hidden'){
     // Persist state
-    saveWorld(); savePlayer();
+    saveWorld(); savePlayer(); saveTimePhase();
     // Pause all audio scheduling to avoid throttled/uneven timers
     stopMusic();
     stopLabPreview();
@@ -1206,6 +1225,10 @@ function ensurePlayerNotStuck(){
 }
 // Try load player; otherwise respawn
 if (!loadPlayer()) respawn(); else ensurePlayerNotStuck();
+
+// Load saved time phase or default to ~10am (sun has been up for ~4h from 6am)
+let initialTimePhase = loadTimePhase();
+if (initialTimePhase == null) initialTimePhase = (10 - 6) / 24; // 1/6 ≈ 0.1667
 
 // Controls
 const keys = new Set();
@@ -1544,6 +1567,10 @@ function frame(now){
   resizeCanvasToDisplaySize();
   const dt = Math.min(0.05, (now-last)/1000); // clamp
   last = now;
+  // Initialize worldTime once from saved/default phase right before first tick
+  if (worldTime === 0 && initialTimePhase != null) {
+    worldTime = initialTimePhase * DAY_LENGTH;
+  }
   worldTime += dt;
 
   // Input -> desired velocity aligned to camera yaw
