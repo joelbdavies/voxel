@@ -8,6 +8,7 @@ const canvas = document.getElementById('glcanvas');
 const selectedEl = document.getElementById('selected');
 const cloudsEl = document.getElementById('clouds');
 const musicEl = document.getElementById('music');
+const torchEl = document.getElementById('torch');
 const labEl = document.getElementById('musiclab');
 
 // --- Audio (8-bit SFX + music) ---
@@ -357,9 +358,11 @@ uniform mat4 u_proj;
 uniform mat4 u_view;
 varying vec3 v_norm;
 varying vec2 v_uv;
+varying vec3 v_worldPos;
 void main(){
   v_norm = a_norm;
   v_uv = a_uv;
+  v_worldPos = a_pos;
   gl_Position = u_proj * u_view * vec4(a_pos,1.0);
 }`;
 
@@ -367,16 +370,43 @@ const FS = `
 precision mediump float;
 varying vec3 v_norm;
 varying vec2 v_uv;
+varying vec3 v_worldPos;
 uniform sampler2D u_tex;
 uniform vec3 u_sunDir;
 uniform float u_ambient;
 uniform float u_sunDiffuse;
+uniform vec3 u_torchPos;      // world-space torch position
+uniform float u_torchOn;      // 0 or 1
+uniform float u_torchRadius;  // meters
+uniform float u_torchIntensity; // brightness scalar
+uniform vec3 u_torchDir;      // normalized torch direction (camera forward)
+uniform vec3 u_torchColor;    // warm torch color
+uniform float u_torchCosInner;// cos(inner cone angle)
+uniform float u_torchCosOuter;// cos(outer cone angle)
+uniform float u_time;         // seconds, for subtle flicker
 void main(){
   vec3 n = normalize(v_norm);
   float diff = max(dot(n, normalize(u_sunDir)), 0.0);
-  float light = clamp(u_ambient + diff * u_sunDiffuse, 0.0, 1.5);
+  float sun = clamp(u_ambient + diff * u_sunDiffuse, 0.0, 1.5);
+
+  // Torch spotlight: distance falloff + cone + lambert, with slight flicker
+  vec3 L = v_worldPos - u_torchPos;         // light->fragment
+  float d = length(L);
+  vec3 Ldir = (d > 0.0) ? (L / d) : vec3(0.0,0.0,1.0);
+  float spotRaw = smoothstep(u_torchCosOuter, u_torchCosInner, dot(Ldir, normalize(u_torchDir)));
+  // Soften penumbra (gamma < 1 widens)
+  float spot = pow(spotRaw, 0.7);
+  // Gentle edge: keep full strength until ~65% radius, then ease out
+  float atten = 1.0 - smoothstep(u_torchRadius * 0.65, u_torchRadius, d);
+  atten = pow(atten, 1.2);
+  float ndotl = max(dot(n, normalize(-Ldir)), 0.0);
+  float flicker = 0.92 + 0.08 * sin(u_time * 8.7) + 0.05 * sin(u_time * 13.1);
+  flicker = clamp(flicker, 0.85, 1.15);
+  float torchTerm = u_torchOn * u_torchIntensity * ndotl * atten * spot * flicker;
+
+  vec3 light = vec3(sun) + (u_torchColor * torchTerm);
   vec4 tex = texture2D(u_tex, v_uv);
-  gl_FragColor = vec4(tex.rgb * light, 1.0);
+  gl_FragColor = vec4(tex.rgb * clamp(light, 0.0, 2.0), 1.0);
 }`;
 
 function makeShader(type, src){
@@ -408,6 +438,15 @@ const u_texLoc = gl.getUniformLocation(prog, 'u_tex');
 const u_sunDirLoc = gl.getUniformLocation(prog, 'u_sunDir');
 const u_ambientLoc = gl.getUniformLocation(prog, 'u_ambient');
 const u_sunDiffuseLoc = gl.getUniformLocation(prog, 'u_sunDiffuse');
+const u_torchPosLoc = gl.getUniformLocation(prog, 'u_torchPos');
+const u_torchOnLoc = gl.getUniformLocation(prog, 'u_torchOn');
+const u_torchRadiusLoc = gl.getUniformLocation(prog, 'u_torchRadius');
+const u_torchIntensityLoc = gl.getUniformLocation(prog, 'u_torchIntensity');
+const u_torchDirLoc = gl.getUniformLocation(prog, 'u_torchDir');
+const u_torchColorLoc = gl.getUniformLocation(prog, 'u_torchColor');
+const u_torchCosInnerLoc = gl.getUniformLocation(prog, 'u_torchCosInner');
+const u_torchCosOuterLoc = gl.getUniformLocation(prog, 'u_torchCosOuter');
+const u_timeWorldLoc = gl.getUniformLocation(prog, 'u_time');
 
 // Texture atlas generation (procedural) with bold borders per tile
 const TILE_SIZE = 64; // px per tile
@@ -1246,6 +1285,9 @@ let sprint = false;
 let cloudMode = 2;
 // Time mode: 0 auto cycle, 1 force day, 2 force night
 let timeMode = 0;
+// Torch
+let torchEnabled = false;
+function updateTorchLabel(){ if (torchEl) torchEl.textContent = `Torch: ${torchEnabled ? 'On' : 'Off'} (L)`; }
 window.addEventListener('keydown', (e)=>{
   // If music lab is open, only allow 'G' to close it; ignore other game controls
   if (labEl && !labEl.classList.contains('hidden') && e.code !== 'KeyG') return;
@@ -1281,6 +1323,11 @@ window.addEventListener('keydown', (e)=>{
     timeMode = (timeMode + 1) % 3;
     const names = ['Auto','Day','Night'];
     console.log('Time:', names[timeMode]);
+  }
+  if (e.code==='KeyL') { // Torch toggle
+    e.preventDefault();
+    torchEnabled = !torchEnabled;
+    updateTorchLabel();
   }
   if (e.code==='Comma') { setTrack(currentTrackIndex-1); }
   if (e.code==='Period') { setTrack(currentTrackIndex+1); }
@@ -1350,8 +1397,9 @@ if (typeof window !== 'undefined' && window.__loadedSelectedIndex != null){
 function updateCloudsLabel(){
   const names = ['No Clouds','Wispy','Both','Puffy'];
   if (cloudsEl) cloudsEl.textContent = `Clouds: ${names[cloudMode]} (K)`;
-}
-updateCloudsLabel();
+  }
+  updateCloudsLabel();
+  updateTorchLabel();
 
 // Cycle selected block: Q/E and [ ]
 window.addEventListener('keydown', (e)=>{
@@ -1720,6 +1768,17 @@ function frame(now){
   gl.uniform3f(u_sunDirLoc, sdx, sdy, sdz);
   gl.uniform1f(u_ambientLoc, ambient);
   gl.uniform1f(u_sunDiffuseLoc, sunDiff);
+  // Torch uniforms (spotlight facing camera direction)
+  gl.uniform3f(u_torchPosLoc, camPos[0], camPos[1], camPos[2]);
+  gl.uniform1f(u_torchOnLoc, torchEnabled ? 1.0 : 0.0);
+  gl.uniform1f(u_torchRadiusLoc, 12.0);
+  gl.uniform1f(u_torchIntensityLoc, 2.0);
+  gl.uniform3f(u_torchDirLoc, lookDir[0], lookDir[1], lookDir[2]);
+  gl.uniform3f(u_torchColorLoc, 1.0, 0.78, 0.45);
+  const inner = 18 * Math.PI/180, outer = 42 * Math.PI/180;
+  gl.uniform1f(u_torchCosInnerLoc, Math.cos(inner));
+  gl.uniform1f(u_torchCosOuterLoc, Math.cos(outer));
+  gl.uniform1f(u_timeWorldLoc, now * 0.001);
 
   gl.drawArrays(gl.TRIANGLES, 0, vCount);
 
