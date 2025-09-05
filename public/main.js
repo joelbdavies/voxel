@@ -9,7 +9,6 @@ const selectedEl = document.getElementById('selected');
 const cloudsEl = document.getElementById('clouds');
 const musicEl = document.getElementById('music');
 const torchEl = document.getElementById('torch');
-const fxaaEl = document.getElementById('fxaa');
 const fpsEl = document.getElementById('fps');
 const labEl = document.getElementById('musiclab');
 
@@ -1463,14 +1462,13 @@ let timeMode = 0;
 // Torch
 let torchEnabled = false;
 function updateTorchLabel(){ if (torchEl) torchEl.textContent = `Torch: ${torchEnabled ? 'On' : 'Off'} (L)`; }
-function updateFxaaLabel(){ if (fxaaEl) fxaaEl.textContent = `AA: ${fxaaEnabled ? 'FXAA' : 'None'} (F)`; }
+// (FXAA HUD removed)
 
 // Load persisted settings early to override defaults
 loadSettings();
 // Reflect in HUD immediately
 updateCloudsLabel();
 updateTorchLabel();
-updateFxaaLabel();
 updateMusicLabel();
 window.addEventListener('keydown', (e)=>{
   // If music lab is open, only allow 'G' to close it; ignore other game controls
@@ -1504,13 +1502,6 @@ window.addEventListener('keydown', (e)=>{
     updateCloudsLabel();
     saveSettings();
   }
-  if (e.code==='KeyF') { // Toggle FXAA
-    e.preventDefault();
-    fxaaEnabled = !fxaaEnabled;
-    console.log('FXAA:', fxaaEnabled ? 'On' : 'Off');
-    updateFxaaLabel();
-    saveSettings();
-  }
   if (e.code==='KeyT') { // Toggle time: Auto -> Day -> Night
     e.preventDefault();
     timeMode = (timeMode + 1) % 3;
@@ -1518,7 +1509,7 @@ window.addEventListener('keydown', (e)=>{
     console.log('Time:', names[timeMode]);
     saveSettings();
   }
-  if (e.code==='KeyL') { // Torch toggle
+  if (e.code==='KeyF') { // Torch toggle (rebound from L)
     e.preventDefault();
     torchEnabled = !torchEnabled;
     updateTorchLabel();
@@ -1595,7 +1586,6 @@ function updateCloudsLabel(){
   }
   updateCloudsLabel();
   updateTorchLabel();
-  updateFxaaLabel();
 
 // Cycle selected block: Q/E and [ ]
 window.addEventListener('keydown', (e)=>{
@@ -1628,7 +1618,27 @@ function placeSelectedBlockOnce(){
       const inside = (tx+1 > px-PLAYER_W/2 && tx < px+PLAYER_W/2 &&
                       ty+1 > py && ty < py+PLAYER_H &&
                       tz+1 > pz-PLAYER_D/2 && tz < pz+PLAYER_D/2);
-      if (!inside) { setBlock(tx,ty,tz, placeId); sfxPlace(); }
+      if (!inside) {
+        setBlock(tx,ty,tz, placeId); sfxPlace();
+      } else {
+        // Special case: allow placing on the block we're standing on when pointing at its top
+        const bx = Math.floor(px);
+        const by = Math.floor(py);
+        const bz = Math.floor(pz);
+        const isTopFace = (hit.face[0]===0 && hit.face[1]===1 && hit.face[2]===0);
+        const placingAtFeetCell = (tx===bx && ty===by && tz===bz);
+        if (isTopFace && placingAtFeetCell){
+          const newY = ty + 1 + 1e-3; // stand on top of the placed block
+          if (!aabbIntersectsBlock(px, newY, pz)){
+            setBlock(tx,ty,tz, placeId);
+            player.pos[1] = newY;
+            player.vel[1] = 0;
+            player.onGround = true;
+            savePlayer();
+            sfxPlace();
+          }
+        }
+      }
     }
   }
 }
@@ -1648,14 +1658,12 @@ function breakBlockOnce(){
   }
 }
 
-// Bind B to place: prefer underfoot; fallback to crosshair
+// Bind B to place where we're pointing (with standing-on-block allowance)
 window.addEventListener('keydown', (e)=>{
   if (e.code==='KeyB') {
     if (labEl && !labEl.classList.contains('hidden')) return;
     e.preventDefault();
-    if (!placeBlockUnderPlayer()) {
-      placeSelectedBlockOnce();
-    }
+    placeSelectedBlockOnce();
   }
 });
 
