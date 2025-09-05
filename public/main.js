@@ -1461,7 +1461,10 @@ let cloudMode = 2;
 let timeMode = 0;
 // Torch
 let torchEnabled = false;
-function updateTorchLabel(){ if (torchEl) torchEl.textContent = `Torch: ${torchEnabled ? 'On' : 'Off'} (L)`; }
+// Fly mode (double Space toggles)
+let flyMode = false;
+let lastSpaceTap = 0;
+function updateTorchLabel(){ if (torchEl) torchEl.textContent = `Torch: ${torchEnabled ? 'On' : 'Off'} (F)`; }
 // (FXAA HUD removed)
 
 // Load persisted settings early to override defaults
@@ -1477,6 +1480,17 @@ window.addEventListener('keydown', (e)=>{
   if (!audioCtx) initAudio(); else resumeAudio();
   if (e.code==='ShiftLeft' || e.code==='ShiftRight') sprint = true;
   if (e.code==='KeyR') respawn();
+  if (e.code==='Space') {
+    const t = performance.now();
+    if (t - lastSpaceTap < 300) {
+      flyMode = !flyMode;
+      if (flyMode) {
+        player.vel[1] = 0;
+        player.onGround = false;
+      }
+    }
+    lastSpaceTap = t;
+  }
   if (e.code==='KeyM') {
     initAudio();
     resumeAudio();
@@ -1869,15 +1883,21 @@ function frame(now){
   const rightX =  Math.cos(yaw), rightZ = -Math.sin(yaw);
   const vx = (forward*fwdX + strafe*rightX) * speed;
   const vz = (forward*fwdZ + strafe*rightZ) * speed;
-  // Jump
-  if (keys.has('Space') && player.onGround){
-    player.vel[1] = 6.5;
-    player.onGround = false;
-    sfxJump();
+  if (flyMode) {
+    // Vertical: Space ascend, Ctrl descend
+    const ascend = keys.has('Space') ? 1 : 0;
+    const descend = (keys.has('ControlLeft') || keys.has('ControlRight')) ? 1 : 0;
+    player.vel[1] = (ascend - descend) * speed;
+  } else {
+    // Jump
+    if (keys.has('Space') && player.onGround){
+      player.vel[1] = 6.5;
+      player.onGround = false;
+      sfxJump();
+    }
+    // Gravity
+    player.vel[1] -= 20 * dt;
   }
-
-  // Gravity
-  player.vel[1] -= 20 * dt;
 
   // Integrate with collisions (track horizontal delta for footsteps)
   const prevX = player.pos[0], prevZ = player.pos[2];
