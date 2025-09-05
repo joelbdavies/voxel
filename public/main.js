@@ -6,6 +6,7 @@
 
 const canvas = document.getElementById('glcanvas');
 const selectedEl = document.getElementById('selected');
+const cloudsEl = document.getElementById('clouds');
 const musicEl = document.getElementById('music');
 const labEl = document.getElementById('musiclab');
 
@@ -482,18 +483,23 @@ function makeProgram(vsSrc, fsSrc){
 
 const SKY_VS = `
 attribute vec2 a_pos;
-varying vec2 v_uv;
+varying vec2 v_ndc;
 void main(){
-  v_uv = a_pos*0.5 + 0.5;
+  v_ndc = a_pos; // clip-space quad in [-1,1]
   gl_Position = vec4(a_pos, 0.0, 1.0);
 }`;
 
 const SKY_FS = `
 precision mediump float;
-varying vec2 v_uv;
+varying vec2 v_ndc; // [-1,1]
 uniform float u_time;
+uniform float u_yaw;
+uniform float u_pitch;
+uniform float u_fov;
+uniform float u_aspect;
+uniform int u_cloudMode; // 0 none, 1 wispy, 2 both, 3 puffy
 
-// simple value noise
+// 2D value noise (kept for possible future use)
 float hash(vec2 p){ return fract(sin(dot(p, vec2(127.1,311.7))) * 43758.5453); }
 float noise(vec2 p){
   vec2 i = floor(p);
@@ -505,29 +511,139 @@ float noise(vec2 p){
   vec2 u = f*f*(3.0-2.0*f);
   return mix(a, b, u.x) + (c - a)*u.y*(1.0 - u.x) + (d - b)*u.x*u.y;
 }
+float fbm(vec2 p){
+  float a = 0.5;
+  float f = 1.0;
+  float s = 0.0;
+  for(int i=0;i<5;i++){
+    s += a * noise(p*f);
+    f *= 2.02;
+    a *= 0.5;
+  }
+  return s;
+}
+
+// 3D value noise helpers (for seamless sky sampling)
+float hash3(vec3 p){ return fract(sin(dot(p, vec3(127.1,311.7, 74.7))) * 43758.5453); }
+float noise3(vec3 p){
+  vec3 i = floor(p);
+  vec3 f = fract(p);
+  float n000 = hash3(i + vec3(0.0,0.0,0.0));
+  float n100 = hash3(i + vec3(1.0,0.0,0.0));
+  float n010 = hash3(i + vec3(0.0,1.0,0.0));
+  float n110 = hash3(i + vec3(1.0,1.0,0.0));
+  float n001 = hash3(i + vec3(0.0,0.0,1.0));
+  float n101 = hash3(i + vec3(1.0,0.0,1.0));
+  float n011 = hash3(i + vec3(0.0,1.0,1.0));
+  float n111 = hash3(i + vec3(1.0,1.0,1.0));
+  vec3 u = f*f*(3.0-2.0*f);
+  float nx00 = mix(n000, n100, u.x);
+  float nx10 = mix(n010, n110, u.x);
+  float nx01 = mix(n001, n101, u.x);
+  float nx11 = mix(n011, n111, u.x);
+  float nxy0 = mix(nx00, nx10, u.y);
+  float nxy1 = mix(nx01, nx11, u.y);
+  return mix(nxy0, nxy1, u.z);
+}
+float fbm3(vec3 p){
+  float a = 0.5;
+  float f = 1.0;
+  float s = 0.0;
+  for(int i=0;i<4;i++){
+    s += a * noise3(p*f);
+    f *= 2.02;
+    a *= 0.5;
+  }
+  return s;
+}
 
 void main(){
-  // vertical gradient sky
+  // Build view ray in camera space
+  float tanHalfFov = tan(u_fov*0.5);
+  vec3 dirCam = normalize(vec3(v_ndc.x * tanHalfFov * u_aspect, v_ndc.y * tanHalfFov, -1.0));
+  // Build camera-to-world basis consistent with world renderer
+  float cy = cos(u_yaw), sy = sin(u_yaw);
+  float cp = cos(u_pitch), sp = sin(u_pitch);
+  vec3 right = vec3(cy, 0.0, -sy);
+  vec3 up    = vec3(sy*sp, cp, cy*sp);
+  vec3 fwd   = vec3(-sy*cp, sp, -cy*cp);
+  // camera->world: worldDir = x*right + y*up + z*(-forward)
+  vec3 dir = normalize(dirCam.x*right + dirCam.y*up + dirCam.z*(-fwd));
+
+  // Base sky gradient using elevation
   vec3 skyTop = vec3(0.38, 0.62, 0.95);
   vec3 skyBottom = vec3(0.70, 0.88, 1.00);
-  float t = clamp(pow(v_uv.y, 0.65), 0.0, 1.0);
+  float h = clamp(dir.y*0.5 + 0.5, 0.0, 1.0);
+  float t = pow(h, 0.65);
   vec3 col = mix(skyBottom, skyTop, t);
 
-  // moving soft clouds
-  vec2 p = vec2(v_uv.x + u_time*0.01, v_uv.y*0.6);
-  float n = 0.0;
-  n += noise(p*2.5);
-  n += 0.5*noise(p*5.0 + 10.0);
-  n += 0.25*noise(p*10.0 + 50.0);
-  n /= 1.75;
-  float clouds = smoothstep(0.6, 0.82, n);
-  col = mix(col, vec3(1.0), clouds*0.55);
+  // Sun direction (world-anchored) for cloud shading and later disk
+  vec3 sunDir = normalize(vec3(0.6, 0.45, 0.65));
 
-  // sun disk + glow
-  vec2 sunPos = vec2(0.82, 0.22);
-  float d = distance(v_uv, sunPos);
-  float sun = smoothstep(0.06, 0.04, d);
-  float glow = smoothstep(0.28, 0.08, d);
+  // Domain-warped FBM clouds (seamless over sphere)
+  float speed = 0.010; // slightly faster wispy layer
+  vec3 wind = normalize(vec3(0.6, 0.0, 0.2));
+  vec3 s = dir * 2.0 + wind * (u_time * speed);
+  vec3 q = vec3(
+    fbm3(s*1.7),
+    fbm3(s*1.7 + vec3(5.2,1.3,8.5)),
+    fbm3(s*1.7 + vec3(1.7,9.2,2.1))
+  );
+  vec3 r = vec3(
+    fbm3(s*3.1 + 2.0*q + vec3(1.7,9.2,2.1)),
+    fbm3(s*3.1 + 2.0*q + vec3(8.3,2.8,1.4)),
+    fbm3(s*3.1 + 2.0*q)
+  );
+  float n = fbm3(s*2.0 + 2.5*r);
+  // Sharpen and shape
+  float base = smoothstep(0.60, 0.82, n);
+  float puff = pow(clamp(n,0.0,1.0), 2.0);
+  float clouds1 = clamp(base*0.55 + puff*0.45, 0.0, 1.0);
+  // Fade clouds near horizon and below
+  float horizonMask = smoothstep(0.00, 0.18, dir.y);
+  clouds1 *= horizonMask;
+  // Mix wispy layer with mode-specific strength
+  float wispyStrength = 0.0;
+  if (u_cloudMode == 1)      wispyStrength = 0.45; // wispy only
+  else if (u_cloudMode == 2) wispyStrength = 0.28; // both
+  col = mix(col, vec3(1.0), clouds1 * wispyStrength);
+
+  // Second layer: larger, cartoonish puffy clouds (bright white, crisp edges)
+  float speed2 = 0.004; // slower drift for big puffs
+  vec3 wind2 = normalize(vec3(0.2, 0.0, 0.6));
+  vec3 s2 = dir * 0.40 + wind2 * (u_time * speed2);
+  vec3 q2 = vec3(
+    fbm3(s2*1.1),
+    fbm3(s2*1.1 + vec3(3.7,0.8,6.1)),
+    fbm3(s2*1.1 + vec3(1.1,5.5,2.9))
+  );
+  vec3 r2 = vec3(
+    fbm3(s2*2.0 + 1.8*q2 + vec3(1.7,4.2,2.1)),
+    fbm3(s2*2.0 + 1.8*q2 + vec3(5.3,1.8,1.4)),
+    fbm3(s2*2.0 + 1.8*q2)
+  );
+  float d2 = fbm3(s2*1.1 + 1.6*r2);
+  // Hard, crisp silhouette and rim for cartoon look (reduced coverage)
+  float core = smoothstep(0.48, 0.56, d2);
+  float rim  = core * (1.0 - smoothstep(0.56, 0.60, d2));
+  core *= horizonMask; rim *= horizonMask;
+  // Mode-specific strength: puffy dominates in both/puffy modes
+  float puffyStrength = 0.0;
+  if (u_cloudMode == 2)      puffyStrength = 0.65; // both (less dominant)
+  else if (u_cloudMode == 3) puffyStrength = 0.95; // puffy only
+  // Colors: solid white body with a subtle bluish rim
+  vec3 bodyColor = vec3(1.0);
+  vec3 rimColor  = vec3(0.90, 0.94, 1.0);
+  float coreNoRim = max(core - rim*0.95, 0.0);
+  // Compose: fill body, then overlay rim for clear edge
+  col = mix(col, bodyColor, coreNoRim * puffyStrength);
+  col = mix(col, rimColor,  rim * min(1.0, puffyStrength + 0.2));
+
+  // Sun: disk + glow using world-anchored direction
+  float cosAng = dot(dir, sunDir);
+  float ang = acos(clamp(cosAng, -1.0, 1.0));
+  float sun = smoothstep(0.03, 0.02, ang);
+  float glow = smoothstep(0.22, 0.05, ang);
   vec3 sunColor = vec3(1.0, 0.96, 0.85);
   col = mix(col, sunColor, glow*0.35);
   col = mix(col, vec3(1.0), sun);
@@ -538,6 +654,11 @@ void main(){
 const skyProg = makeProgram(SKY_VS, SKY_FS);
 const sky_a_pos = gl.getAttribLocation(skyProg, 'a_pos');
 const sky_u_time = gl.getUniformLocation(skyProg, 'u_time');
+const sky_u_yaw = gl.getUniformLocation(skyProg, 'u_yaw');
+const sky_u_pitch = gl.getUniformLocation(skyProg, 'u_pitch');
+const sky_u_fov = gl.getUniformLocation(skyProg, 'u_fov');
+const sky_u_aspect = gl.getUniformLocation(skyProg, 'u_aspect');
+const sky_u_cloudMode = gl.getUniformLocation(skyProg, 'u_cloudMode');
 const skyVBO = gl.createBuffer();
 gl.bindBuffer(gl.ARRAY_BUFFER, skyVBO);
 // full-screen triangle
@@ -1057,6 +1178,8 @@ if (!loadPlayer()) respawn(); else ensurePlayerNotStuck();
 // Controls
 const keys = new Set();
 let sprint = false;
+// Cloud rendering mode: 0 none, 1 wispy, 2 both, 3 puffy
+let cloudMode = 2;
 window.addEventListener('keydown', (e)=>{
   // If music lab is open, only allow 'G' to close it; ignore other game controls
   if (labEl && !labEl.classList.contains('hidden') && e.code !== 'KeyG') return;
@@ -1081,6 +1204,11 @@ window.addEventListener('keydown', (e)=>{
   if (e.code==='KeyO') { // Load world from pasted code
     e.preventDefault();
     promptLoadWorldCode();
+  }
+  if (e.code==='KeyK') { // Cycle cloud modes
+    e.preventDefault();
+    cloudMode = (cloudMode + 1) & 3; // 0..3
+    updateCloudsLabel();
   }
   if (e.code==='Comma') { setTrack(currentTrackIndex-1); }
   if (e.code==='Period') { setTrack(currentTrackIndex+1); }
@@ -1140,6 +1268,12 @@ function updateSelectedLabel(){
   selectedEl.textContent = `Selected: ${names[placeOptions[selectedIndex]]}`;
 }
 updateSelectedLabel();
+
+function updateCloudsLabel(){
+  const names = ['No Clouds','Wispy','Both','Puffy'];
+  if (cloudsEl) cloudsEl.textContent = `Clouds: ${names[cloudMode]} (K)`;
+}
+updateCloudsLabel();
 
 // Cycle selected block: Q/E and [ ]
 window.addEventListener('keydown', (e)=>{
@@ -1432,6 +1566,13 @@ function frame(now){
   gl.enableVertexAttribArray(sky_a_pos);
   gl.vertexAttribPointer(sky_a_pos, 2, gl.FLOAT, false, 0, 0);
   gl.uniform1f(sky_u_time, now * 0.001);
+  const aspect = gl.drawingBufferWidth / gl.drawingBufferHeight;
+  const fov = Math.PI/3;
+  gl.uniform1f(sky_u_yaw, player.yaw);
+  gl.uniform1f(sky_u_pitch, player.pitch);
+  gl.uniform1f(sky_u_fov, fov);
+  gl.uniform1f(sky_u_aspect, aspect);
+  gl.uniform1i(sky_u_cloudMode, cloudMode);
   gl.drawArrays(gl.TRIANGLES, 0, 3);
   gl.depthMask(true);
 
