@@ -571,6 +571,198 @@ function base64ToBytes(b64){
   return out;
 }
 
+// URL-safe base64 helpers (no padding)
+function b64urlEncode(bytes){
+  return bytesToBase64(bytes).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
+}
+function b64urlDecode(str){
+  let b64 = str.replace(/-/g,'+').replace(/_/g,'/');
+  const pad = b64.length % 4;
+  if (pad) b64 += '='.repeat(4 - pad);
+  return base64ToBytes(b64);
+}
+
+// Simple RLE with varint run lengths: [value:uint8][run:varint]...
+function writeVarint(arr, value){
+  while (value >= 0x80){ arr.push((value & 0x7F) | 0x80); value >>>= 7; }
+  arr.push(value & 0x7F);
+}
+function readVarint(bytes, i){
+  let shift = 0, val = 0;
+  while (i < bytes.length){
+    const b = bytes[i++];
+    val |= (b & 0x7F) << shift;
+    if (!(b & 0x80)) break;
+    shift += 7;
+  }
+  return { value: val, next: i };
+}
+function rleCompress(u8){
+  const out = [];
+  let prev = u8[0];
+  let run = 1;
+  for (let i=1;i<u8.length;i++){
+    const v = u8[i];
+    if (v === prev && run < 0x1fffffff){ run++; }
+    else {
+      out.push(prev);
+      writeVarint(out, run);
+      prev = v; run = 1;
+    }
+  }
+  out.push(prev); writeVarint(out, run);
+  return new Uint8Array(out);
+}
+function rleDecompress(u8, outLen){
+  const out = new Uint8Array(outLen);
+  let i=0, o=0;
+  while (i < u8.length && o < outLen){
+    const val = u8[i++];
+    const r = readVarint(u8, i); i = r.next;
+    for (let k=0;k<r.value && o<outLen;k++) out[o++] = val;
+  }
+  return out;
+}
+
+// Build deterministic base world (same as initial generation)
+function buildBaseWorldArray(){
+  const arr = new Uint8Array(blocks.length);
+  for(let z=0; z<WORLD_D; z++){
+    for(let x=0; x<WORLD_W; x++){
+      const h = heightAt(x,z);
+      for(let y=0; y<=h; y++){
+        const isTop = y===h;
+        let id = 0;
+        if (isTop) id = 1; // grass
+        else if (y >= h-2) id = 3; // dirt
+        else id = 4; // stone
+        arr[idx(x,y,z)] = id;
+      }
+      if (h < WATER_LEVEL){
+        for(let y=h+1; y<=WATER_LEVEL; y++){
+          arr[idx(x,y,z)] = 5; // water
+        }
+      }
+    }
+  }
+  return arr;
+}
+
+function encodeDeltaFromBase(){
+  const base = buildBaseWorldArray();
+  const out = [];
+  // collect indices that differ
+  const diffs = [];
+  for (let i=0;i<blocks.length;i++){
+    if (blocks[i] !== base[i]) diffs.push(i);
+  }
+  // write count
+  writeVarint(out, diffs.length);
+  // delta-encode indices
+  let prev = 0;
+  for (let j=0;j<diffs.length;j++){
+    const i = diffs[j];
+    writeVarint(out, i - prev);
+    out.push(blocks[i]);
+    prev = i;
+  }
+  return new Uint8Array(out);
+}
+
+function decodeDeltaIntoWorld(body){
+  const base = buildBaseWorldArray();
+  blocks.set(base);
+  // read count
+  let i = 0; const r = readVarint(body, i); let count = r.value; i = r.next;
+  let index = 0;
+  for (let k=0;k<count;k++){
+    const dv = readVarint(body, i); i = dv.next;
+    index += dv.value; // delta
+    const val = body[i++];
+    if (index>=0 && index<blocks.length) blocks[index] = val;
+  }
+}
+
+// Encode world blocks → compact url-safe string
+function encodeWorldToCode(){
+  // Option A: full RLE
+  const headerV2 = new Uint8Array([86,87,50, WORLD_W, WORLD_H, WORLD_D]); // 'V''W''2' + dims
+  const fullBody = rleCompress(blocks);
+  const full = new Uint8Array(headerV2.length + 1 + fullBody.length);
+  full.set(headerV2, 0); full[headerV2.length] = 0; // mode=0 full
+  full.set(fullBody, headerV2.length+1);
+
+  // Option B: delta from base world
+  const deltaBytes = encodeDeltaFromBase();
+  const delta = new Uint8Array(headerV2.length + 1 + deltaBytes.length);
+  delta.set(headerV2, 0); delta[headerV2.length] = 1; // mode=1 delta
+  delta.set(deltaBytes, headerV2.length+1);
+
+  const a = b64urlEncode(full);
+  const b = b64urlEncode(delta);
+  return (b.length < a.length) ? b : a;
+}
+function decodeWorldFromCode(code){
+  const data = b64urlDecode(code);
+  if (data.length < 6) throw new Error('Invalid code');
+  if (data[0] !== 86 || data[1] !== 87) throw new Error('Bad magic');
+  const ver = data[2];
+  const w = data[3], h = data[4], d = data[5];
+  if (w!==WORLD_W || h!==WORLD_H || d!==WORLD_D) throw new Error('World size mismatch');
+  if (ver === 49) { // '1' legacy full RLE
+    const body = data.subarray(6);
+    const decompressed = rleDecompress(body, blocks.length);
+    if (decompressed.length !== blocks.length) throw new Error('Decompress mismatch');
+    blocks.set(decompressed);
+  } else if (ver === 50) { // '2'
+    const mode = data[6];
+    const body = data.subarray(7);
+    if (mode === 0){
+      const decompressed = rleDecompress(body, blocks.length);
+      if (decompressed.length !== blocks.length) throw new Error('Decompress mismatch');
+      blocks.set(decompressed);
+    } else if (mode === 1){
+      decodeDeltaIntoWorld(body);
+    } else {
+      throw new Error('Unknown mode');
+    }
+  } else {
+    throw new Error('Unknown version');
+  }
+  worldDirty = true;
+}
+
+async function copyWorldCode(){
+  const code = encodeWorldToCode();
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText){
+      await navigator.clipboard.writeText(code);
+    } else {
+      const ta = document.createElement('textarea');
+      ta.value = code; document.body.appendChild(ta); ta.select();
+      document.execCommand('copy'); document.body.removeChild(ta);
+    }
+    console.log('World code copied. Length:', code.length);
+  } catch (e) {
+    console.warn('Copy failed:', e);
+    alert('Copy failed. See console for the code.');
+    console.log(code);
+  }
+}
+
+function promptLoadWorldCode(){
+  const str = prompt('Paste world code:');
+  if (!str) return;
+  try {
+    decodeWorldFromCode(str.trim());
+    saveWorld();
+    alert('World loaded!');
+  } catch (e){
+    console.warn(e);
+    alert('Failed to load code: ' + e.message);
+  }
+}
+
 function saveWorld(){
   try {
     const payload = {
@@ -854,6 +1046,14 @@ window.addEventListener('keydown', (e)=>{
     resumeAudio();
     musicEnabled = !musicEnabled;
     if (musicEnabled) startMusic(); else stopMusic();
+  }
+  if (e.code==='KeyP') { // Save world to clipboard
+    e.preventDefault();
+    copyWorldCode();
+  }
+  if (e.code==='KeyO') { // Load world from pasted code
+    e.preventDefault();
+    promptLoadWorldCode();
   }
   if (e.code==='Comma') { setTrack(currentTrackIndex-1); }
   if (e.code==='Period') { setTrack(currentTrackIndex+1); }
