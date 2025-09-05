@@ -1487,11 +1487,14 @@ window.addEventListener('keydown', (e)=>{
   if (e.code==='KeyR') respawn();
   if (e.code==='Space') {
     const t = performance.now();
-    // Only toggle flight on double-tap while on ground to avoid accidental toggles mid-air
-    if ((t - lastSpaceTap) < 300 && player.onGround) {
-      flyMode = !flyMode;
-      if (flyMode) { player.vel[1] = 0; player.onGround = false; }
-      saveSettings();
+    // Simple: double Space starts flight (no toggle). Use double Ctrl to end.
+    if ((t - lastSpaceTap) < 300) {
+      if (!flyMode) {
+        flyMode = true;
+        player.vel[1] = 0;
+        player.onGround = false;
+        saveSettings();
+      }
     }
     lastSpaceTap = t;
   }
