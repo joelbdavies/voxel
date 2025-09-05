@@ -1944,12 +1944,15 @@ function initMobileUI(){
 
   const setBtnHold = (el, code)=>{
     if (!el) return;
-    el.addEventListener('touchstart', (e)=>{ e.preventDefault(); keys.add(code); }, {passive:false});
-    el.addEventListener('touchend',   (e)=>{ e.preventDefault(); keys.delete(code); }, {passive:false});
-    el.addEventListener('touchcancel',(e)=>{ e.preventDefault(); keys.delete(code); }, {passive:false});
-    el.addEventListener('mousedown', (e)=>{ e.preventDefault(); keys.add(code); });
-    el.addEventListener('mouseup',   (e)=>{ e.preventDefault(); keys.delete(code); });
-    el.addEventListener('mouseleave',(e)=>{ e.preventDefault(); keys.delete(code); });
+    const down = ()=> keys.add(code);
+    const up = ()=> keys.delete(code);
+    el.addEventListener('touchstart', (e)=>{ e.preventDefault(); down(); }, {passive:false});
+    el.addEventListener('touchend',   (e)=>{ e.preventDefault(); up(); }, {passive:false});
+    el.addEventListener('touchcancel',(e)=>{ e.preventDefault(); up(); }, {passive:false});
+    el.addEventListener('pointerdown', (e)=>{ e.preventDefault(); down(); });
+    el.addEventListener('pointerup',   (e)=>{ e.preventDefault(); up(); });
+    el.addEventListener('pointercancel',(e)=>{ e.preventDefault(); up(); });
+    el.addEventListener('mouseleave', (e)=>{ e.preventDefault(); up(); });
   };
   setBtnHold(btnJump, 'Space');
   setBtnHold(btnUp, 'KeyW');
@@ -1957,12 +1960,15 @@ function initMobileUI(){
   // Left/Right: turn instead of strafe
   const turnOnOff = (el, setFlag)=>{
     if (!el) return;
-    el.addEventListener('touchstart', (e)=>{ e.preventDefault(); setFlag(true); }, {passive:false});
-    el.addEventListener('touchend',   (e)=>{ e.preventDefault(); setFlag(false); }, {passive:false});
-    el.addEventListener('touchcancel',(e)=>{ e.preventDefault(); setFlag(false); }, {passive:false});
-    el.addEventListener('mousedown', (e)=>{ e.preventDefault(); setFlag(true); });
-    el.addEventListener('mouseup',   (e)=>{ e.preventDefault(); setFlag(false); });
-    el.addEventListener('mouseleave',(e)=>{ e.preventDefault(); setFlag(false); });
+    const down = ()=> setFlag(true);
+    const up = ()=> setFlag(false);
+    el.addEventListener('touchstart', (e)=>{ e.preventDefault(); down(); }, {passive:false});
+    el.addEventListener('touchend',   (e)=>{ e.preventDefault(); up(); }, {passive:false});
+    el.addEventListener('touchcancel',(e)=>{ e.preventDefault(); up(); }, {passive:false});
+    el.addEventListener('pointerdown', (e)=>{ e.preventDefault(); down(); });
+    el.addEventListener('pointerup',   (e)=>{ e.preventDefault(); up(); });
+    el.addEventListener('pointercancel',(e)=>{ e.preventDefault(); up(); });
+    el.addEventListener('mouseleave', (e)=>{ e.preventDefault(); up(); });
   };
   turnOnOff(btnLeft, (v)=>{ mobileTurnLeft = v; });
   turnOnOff(btnRight, (v)=>{ mobileTurnRight = v; });
@@ -2040,7 +2046,7 @@ function doPlaceAt(x,y,z, hit){
 function placeSelectedBlockOnce(){
   // Mobile turning: adjust yaw while holding left/right buttons
   {
-    const TURN_SPEED = 1.8; // rad/sec
+    const TURN_SPEED = 3.2; // rad/sec (snappier on mobile)
     if (mobileTurnLeft)  player.yaw += TURN_SPEED * dt;
     if (mobileTurnRight) player.yaw -= TURN_SPEED * dt;
   }
