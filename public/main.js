@@ -1823,11 +1823,9 @@ function onMouseMove(e){
   if (player.pitch < -lim) player.pitch = -lim;
 }
 
-// --- Touch look + hold-to-move (mobile) ---
+// --- Touch look (mobile) ---
 let touchActive = false;
 let lastTouchX = 0, lastTouchY = 0;
-let forwardTimer = null;
-let forwardActive = false;
 let tapCandidate = false;
 let touchStartTime = 0;
 let touchMoveAccum = 0;
@@ -1841,11 +1839,6 @@ function onTouchStart(ev){
   try { initAudio(); resumeAudio(); } catch {}
   touchActive = true; tapCandidate = true; touchMoveAccum = 0; touchStartTime = performance.now();
   lastTouchX = t.clientX; lastTouchY = t.clientY;
-  // Start forward after a short hold to allow tap interactions
-  clearTimeout(forwardTimer);
-  forwardTimer = setTimeout(()=>{
-    forwardActive = true; keys.add('KeyW');
-  }, 180);
 }
 function onTouchMove(ev){
   if (!IS_TOUCH || !touchActive) return;
@@ -1863,19 +1856,9 @@ function onTouchMove(ev){
   if (player.pitch > lim) player.pitch = lim;
   if (player.pitch < -lim) player.pitch = -lim;
 }
-function endForward(){ if (forwardActive) { keys.delete('KeyW'); forwardActive=false; } }
 function onTouchEnd(ev){
   if (!IS_TOUCH) return;
   ev.preventDefault();
-  clearTimeout(forwardTimer);
-  if (touchActive){
-    const dt = performance.now() - touchStartTime;
-    if (!forwardActive && tapCandidate && dt < 200){
-      // Short tap = interact: remove block under crosshair
-      breakBlockOnce();
-    }
-  }
-  endForward();
   touchActive = false;
 }
 canvas.addEventListener('touchstart', onTouchStart, { passive:false });
