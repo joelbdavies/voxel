@@ -2038,8 +2038,8 @@ function doPlaceAt(x,y,z, hit){
 }
 
 function placeSelectedBlockOnce(){
-  // Mobile turning: adjust yaw when holding left/right buttons
-  if (IS_TOUCH) {
+  // Mobile turning: adjust yaw while holding left/right buttons
+  {
     const TURN_SPEED = 1.8; // rad/sec
     if (mobileTurnLeft)  player.yaw += TURN_SPEED * dt;
     if (mobileTurnRight) player.yaw -= TURN_SPEED * dt;
