@@ -668,10 +668,10 @@ void main(){
   col = mix(col, moonColor, mglow*0.25);
   col = mix(col, vec3(1.0), moon);
 
-  // Stars: denser, brighter points with twinkle (simple, reliable)
+  // Stars: increase density (~+50%) and stronger twinkle
   float starVal = noise3(dir * 60.0);
-  float stars = smoothstep(0.985, 0.997, starVal) * (1.0 - u_day);
-  float tw = 0.80 + 0.20 * sin(u_time * 3.0 + starVal * 50.0);
+  float stars = smoothstep(0.978, 0.995, starVal) * (1.0 - u_day);
+  float tw = 0.75 + 0.35 * sin(u_time * 4.2 + starVal * 60.0);
   stars *= tw;
   col += vec3(1.0) * stars * 1.20;
 
