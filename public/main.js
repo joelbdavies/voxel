@@ -12,6 +12,10 @@ const torchEl = document.getElementById('torch');
 const debugEl = document.getElementById('debug');
 const labEl = document.getElementById('musiclab');
 
+// Touch/mobile detection
+const IS_TOUCH = (('ontouchstart' in window) || (navigator.maxTouchPoints>0) || (window.matchMedia && matchMedia('(pointer: coarse)').matches));
+try { if (IS_TOUCH) document.body.classList.add('touch'); } catch {}
+
 // --- Audio (8-bit SFX + music) ---
 let audioCtx = null;
 let masterGain, sfxGain, musicGain;
@@ -1511,6 +1515,19 @@ const BLOCK_TILES = {
   [BLOCK.LAMP]:  { top: tileIndex.lamp, side: tileIndex.lamp, bottom: tileIndex.lamp },
 };
 
+// Representative colors for block outline/UI accents (match drawTile base colors)
+const BLOCK_COLOR = {
+  [BLOCK.GRASS]: '#6fbf50',
+  [BLOCK.DIRT]:  '#8b5a2b',
+  [BLOCK.STONE]: '#9aa0a6',
+  [BLOCK.WATER]: '#3fa7ff',
+  [BLOCK.SAND]:  '#e5d38c',
+  [BLOCK.ROCK]:  '#808080',
+  [BLOCK.WOOD]:  '#9b6b3d',
+  [BLOCK.LEAF]:  '#2a5e1f',
+  [BLOCK.LAMP]:  '#f2e48a',
+};
+
 function inBounds(x,y,z){
   return x>=0 && z>=0 && y>=0 && x<WORLD_W && z<WORLD_D && y<WORLD_H;
 }
@@ -1687,6 +1704,10 @@ updateTorchLabel();
 updateMusicLabel();
 // If flight was persisted, ensure consistent state
 if (flyMode) { try { player.onGround = false; player.vel[1] = 0; } catch(e){} }
+// Initialize mobile UI (buttons + menu) if touch
+initMobileUI();
+// Attempt to autostart music on load if enabled (may be deferred by browser until user gesture)
+try { if (musicEnabled) initAudio(); } catch {}
 window.addEventListener('keydown', (e)=>{
   if (e.code==='F3') {
     e.preventDefault();
@@ -1802,6 +1823,58 @@ function onMouseMove(e){
   if (player.pitch < -lim) player.pitch = -lim;
 }
 
+// --- Touch look (mobile) ---
+let touchActive = false;
+let lastTouchX = 0, lastTouchY = 0;
+let forwardTimer = null;
+let forwardActive = false;
+let tapCandidate = false;
+let touchStartTime = 0;
+let touchMoveAccum = 0;
+
+function onTouchStart(ev){
+  if (!IS_TOUCH) return;
+  if (labEl && !labEl.classList.contains('hidden')) return;
+  const t = ev.touches[0]; if (!t) return;
+  ev.preventDefault();
+  // Try to ensure audio starts on first touch if enabled
+  try { initAudio(); resumeAudio(); } catch {}
+  touchActive = true; tapCandidate = true; touchMoveAccum = 0; touchStartTime = performance.now();
+  lastTouchX = t.clientX; lastTouchY = t.clientY;
+  // Hold-to-move-forward with longer delay to avoid accidental activation
+  clearTimeout(forwardTimer);
+  forwardTimer = setTimeout(()=>{
+    forwardActive = true; keys.add('KeyW');
+  }, 400);
+}
+function onTouchMove(ev){
+  if (!IS_TOUCH || !touchActive) return;
+  const t = ev.touches[0]; if (!t) return;
+  ev.preventDefault();
+  const dx = t.clientX - lastTouchX;
+  const dy = t.clientY - lastTouchY;
+  lastTouchX = t.clientX; lastTouchY = t.clientY;
+  touchMoveAccum += Math.hypot(dx, dy);
+  if (touchMoveAccum > 6) tapCandidate = false;
+  const sensitivity = 0.0040; // a bit higher for touch
+  player.yaw -= dx * sensitivity;
+  player.pitch -= dy * sensitivity;
+  const lim = Math.PI/2 - 0.01;
+  if (player.pitch > lim) player.pitch = lim;
+  if (player.pitch < -lim) player.pitch = -lim;
+}
+function onTouchEnd(ev){
+  if (!IS_TOUCH) return;
+  ev.preventDefault();
+  touchActive = false;
+  clearTimeout(forwardTimer);
+  if (forwardActive){ keys.delete('KeyW'); forwardActive=false; }
+}
+canvas.addEventListener('touchstart', onTouchStart, { passive:false });
+canvas.addEventListener('touchmove', onTouchMove, { passive:false });
+canvas.addEventListener('touchend', onTouchEnd, { passive:false });
+canvas.addEventListener('touchcancel', onTouchEnd, { passive:false });
+
 // Block selection and actions
 const placeOptions = [
   { type:'block', id: BLOCK.GRASS, name:'Grass' },
@@ -1819,6 +1892,15 @@ let selectedIndex = 0;
 function updateSelectedLabel(){
   const opt = placeOptions[selectedIndex];
   selectedEl.textContent = `Selected: ${opt.name}`;
+  // Mobile: reflect in switch button label + outline color
+  const btnSwitch = document.getElementById('btnSwitch');
+  if (btnSwitch){
+    btnSwitch.textContent = opt.name;
+    let color = '#cccccc';
+    if (opt.type === 'block') color = BLOCK_COLOR[opt.id] || color;
+    else if (opt.type === 'tree') color = BLOCK_COLOR[BLOCK.LEAF] || color;
+    btnSwitch.style.borderColor = color;
+  }
 }
 updateSelectedLabel();
 // Apply any loaded selection from storage now that variables exist
@@ -1826,6 +1908,92 @@ if (typeof window !== 'undefined' && window.__loadedSelectedIndex != null){
   selectedIndex = ((window.__loadedSelectedIndex|0)%placeOptions.length + placeOptions.length)%placeOptions.length;
   updateSelectedLabel();
   try { delete window.__loadedSelectedIndex; } catch {}
+}
+
+// --- Mobile UI (buttons + menu) ---
+function initMobileUI(){
+  if (!IS_TOUCH) return;
+  // Show controls container
+  const mc = document.getElementById('mobileControls');
+  if (mc) mc.classList.remove('hidden');
+  const btnJump = document.getElementById('btnJump');
+  const btnUp = document.getElementById('btnUp');
+  const btnDown = document.getElementById('btnDown');
+  const btnLeft = document.getElementById('btnLeft');
+  const btnRight = document.getElementById('btnRight');
+  const btnAdd = document.getElementById('btnAdd');
+  const btnRemove = document.getElementById('btnRemove');
+  const btnSwitch = document.getElementById('btnSwitch');
+  const menuBtn = document.getElementById('menuBtn');
+  const menuClose = document.getElementById('menuClose');
+  const panel = document.getElementById('menuPanel');
+  const mClouds = document.getElementById('menuClouds');
+  const mTime = document.getElementById('menuTime');
+  const mTorch = document.getElementById('menuTorch');
+  const mFxaa = document.getElementById('menuFxaa');
+  const mMusic = document.getElementById('menuMusic');
+  const mPrevTr = document.getElementById('menuPrevTrack');
+  const mNextTr = document.getElementById('menuNextTrack');
+  const mTrackLabel = document.getElementById('menuTrackLabel');
+  const mFly = document.getElementById('menuFly');
+  const mRespawn = document.getElementById('menuRespawn');
+  const mSave = document.getElementById('menuSave');
+  const mLoad = document.getElementById('menuLoad');
+
+  const setBtnHold = (el, code)=>{
+    if (!el) return;
+    const down = ()=> keys.add(code);
+    const up = ()=> keys.delete(code);
+    el.addEventListener('touchstart', (e)=>{ e.preventDefault(); down(); }, {passive:false});
+    el.addEventListener('touchend',   (e)=>{ e.preventDefault(); up(); }, {passive:false});
+    el.addEventListener('touchcancel',(e)=>{ e.preventDefault(); up(); }, {passive:false});
+    el.addEventListener('pointerdown', (e)=>{ e.preventDefault(); down(); });
+    el.addEventListener('pointerup',   (e)=>{ e.preventDefault(); up(); });
+    el.addEventListener('pointercancel',(e)=>{ e.preventDefault(); up(); });
+    el.addEventListener('mouseleave', (e)=>{ e.preventDefault(); up(); });
+  };
+  setBtnHold(btnJump, 'Space');
+  setBtnHold(btnUp, 'KeyW');
+  setBtnHold(btnDown, 'KeyS');
+  // Left/Right: strafe like desktop
+  setBtnHold(btnLeft, 'KeyA');
+  setBtnHold(btnRight, 'KeyD');
+
+  if (btnAdd) btnAdd.addEventListener('click', (e)=>{ e.preventDefault(); placeSelectedBlockOnce(); });
+  if (btnRemove) btnRemove.addEventListener('click', (e)=>{ e.preventDefault(); breakBlockOnce(); });
+  if (btnSwitch) btnSwitch.addEventListener('click', (e)=>{
+    e.preventDefault();
+    selectedIndex = (selectedIndex+1)%placeOptions.length; updateSelectedLabel(); savePlayer();
+  });
+
+  function updateMenuLabels(){
+    const cloudNames = ['None','Wispy','Both','Puffy'];
+    if (mClouds) mClouds.textContent = `Clouds: ${cloudNames[cloudMode]}`;
+    const timeNames = ['Auto','Day','Night'];
+    if (mTime) mTime.textContent = `Time: ${timeNames[timeMode]}`;
+    if (mTorch) mTorch.textContent = `Torch: ${torchEnabled? 'On':'Off'}`;
+    if (mFxaa) mFxaa.textContent = `FXAA: ${fxaaEnabled? 'On':'Off'}`;
+    if (mMusic) mMusic.textContent = `Music: ${musicEnabled? 'On':'Off'}`;
+    const tr = (tracks && tracks[currentTrackIndex]) || {name:'', bpm:DEFAULT_BPM};
+    if (mTrackLabel) mTrackLabel.textContent = `Track ${Math.min(currentTrackIndex+1, tracks.length)}/${tracks.length} ${tr.name}`;
+    if (mFly) mFly.textContent = `Fly: ${flyMode? 'On':'Off'}`;
+  }
+  function openMenu(){ if (panel) panel.classList.remove('hidden'); updateMenuLabels(); }
+  function closeMenu(){ if (panel) panel.classList.add('hidden'); }
+  if (menuBtn) menuBtn.addEventListener('click', (e)=>{ e.preventDefault(); openMenu(); });
+  if (menuClose) menuClose.addEventListener('click', (e)=>{ e.preventDefault(); closeMenu(); });
+  // Menu actions
+  if (mClouds) mClouds.addEventListener('click', (e)=>{ e.preventDefault(); cloudMode=(cloudMode+1)&3; saveSettings(); updateMenuLabels(); });
+  if (mTime) mTime.addEventListener('click', (e)=>{ e.preventDefault(); timeMode=(timeMode+1)%3; saveSettings(); updateMenuLabels(); });
+  if (mTorch) mTorch.addEventListener('click', (e)=>{ e.preventDefault(); torchEnabled=!torchEnabled; updateTorchLabel(); saveSettings(); updateMenuLabels(); });
+  if (mFxaa) mFxaa.addEventListener('click', (e)=>{ e.preventDefault(); fxaaEnabled=!fxaaEnabled; saveSettings(); updateMenuLabels(); });
+  if (mMusic) mMusic.addEventListener('click', (e)=>{ e.preventDefault(); initAudio(); resumeAudio(); musicEnabled=!musicEnabled; if(musicEnabled) startMusic(); else stopMusic(); saveSettings(); updateMenuLabels(); });
+  if (mPrevTr) mPrevTr.addEventListener('click', (e)=>{ e.preventDefault(); setTrack(currentTrackIndex-1); updateMenuLabels(); });
+  if (mNextTr) mNextTr.addEventListener('click', (e)=>{ e.preventDefault(); setTrack(currentTrackIndex+1); updateMenuLabels(); });
+  if (mFly) mFly.addEventListener('click', (e)=>{ e.preventDefault(); flyMode=!flyMode; if(!flyMode){ player.vel[1]=0; } saveSettings(); updateMenuLabels(); });
+  if (mRespawn) mRespawn.addEventListener('click', (e)=>{ e.preventDefault(); respawn(); closeMenu(); });
+  if (mSave) mSave.addEventListener('click', (e)=>{ e.preventDefault(); copyWorldCode(); });
+  if (mLoad) mLoad.addEventListener('click', (e)=>{ e.preventDefault(); promptLoadWorldCode(); closeMenu(); });
 }
 
 function updateCloudsLabel(){
