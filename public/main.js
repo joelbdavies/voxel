@@ -1940,9 +1940,9 @@ function initMobileUI(){
   const mSave = document.getElementById('menuSave');
   const mLoad = document.getElementById('menuLoad');
 
-  const setBtnHold = (el, code)=>{
+  const setBtnHold = (el, code, withAudio=false)=>{
     if (!el) return;
-    const down = ()=> keys.add(code);
+    const down = ()=> { if (withAudio) { try { initAudio(); resumeAudio(); } catch {} } keys.add(code); };
     const up = ()=> keys.delete(code);
     el.addEventListener('touchstart', (e)=>{ e.preventDefault(); down(); }, {passive:false});
     el.addEventListener('touchend',   (e)=>{ e.preventDefault(); up(); }, {passive:false});
@@ -1952,7 +1952,7 @@ function initMobileUI(){
     el.addEventListener('pointercancel',(e)=>{ e.preventDefault(); up(); });
     el.addEventListener('mouseleave', (e)=>{ e.preventDefault(); up(); });
   };
-  setBtnHold(btnJump, 'Space');
+  setBtnHold(btnJump, 'Space', true);
   setBtnHold(btnUp, 'KeyW');
   setBtnHold(btnDown, 'KeyS');
   // Left/Right: strafe like desktop
