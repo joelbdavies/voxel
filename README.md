@@ -31,6 +31,7 @@ Voxel Craft is a lightweight, browser‑based voxel sandbox rendered with WebGL.
 - Game state (world, player position/yaw/pitch/selection, time phase, and settings like clouds/time/torch/FXAA/music/track/fly) auto‑saves to `localStorage`.
 - Rendering includes distance fog tuned to the sky, basic post‑processing, and anisotropic‑filtered mipmaps.
 - Occasional rain appears with matching ambient SFX.
+- The included dev server is intended for local development only; it is not hardened for production hosting.
 
 ## Project Structure
 
@@ -40,4 +41,3 @@ Voxel Craft is a lightweight, browser‑based voxel sandbox rendered with WebGL.
 - `dist/` — build artifacts (e.g., `voxelcraft-single.html`)
 
 For more detail, see `AGENTS.md`.
-

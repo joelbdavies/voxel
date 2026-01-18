@@ -1,7 +1,7 @@
 import { createServer } from 'http';
 import { readFile, stat } from 'fs/promises';
 import { createReadStream } from 'fs';
-import { extname, join, resolve } from 'path';
+import { extname, join, resolve, sep } from 'path';
 import { fileURLToPath } from 'url';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -35,7 +35,11 @@ const server = createServer(async (req, res) => {
     const url = (req.url || '/').split('?')[0];
     let path = decodeURIComponent(url);
     if (path === '/' || path === '') path = '/index.html';
-    const file = join(root, path);
+    const file = resolve(root, `.${path}`);
+    const rootPrefix = root.endsWith(sep) ? root : `${root}${sep}`;
+    if (!file.startsWith(rootPrefix)) {
+      return send(res, 403, { 'content-type': 'text/plain' });
+    }
     const st = await stat(file);
     if (st.isDirectory()) {
       return send(res, 403, { 'content-type': 'text/plain' });
@@ -59,4 +63,3 @@ const server = createServer(async (req, res) => {
 server.listen(port, () => {
   console.log(`Dev server running at http://localhost:${port}`);
 });
-
