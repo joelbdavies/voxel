@@ -8,6 +8,12 @@ Voxel Craft is a lightweight, browser‑based voxel sandbox rendered with WebGL.
   - `npm run dev` (or `npm start`)
   - Open `http://localhost:5173`
 
+## Playable Build
+
+- Try the single-file build in the browser: [Hosted demo](https://voxel-us7k.onrender.com/voxelcraft-single.html)
+
+<img src="voxel.png" alt="Voxel Craft in browser" width="1200" height="644">
+
 ## Build (Single HTML)
 
 - `npm run build:single` → outputs `dist/voxelcraft-single.html`
