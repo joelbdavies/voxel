@@ -11,6 +11,12 @@ const musicEl = document.getElementById('music');
 const torchEl = document.getElementById('torch');
 const debugEl = document.getElementById('debug');
 const labEl = document.getElementById('musiclab');
+const harvestStatusEl = document.getElementById('harvestStatus');
+const hotbarEl = document.getElementById('hotbar');
+const inventoryPanelEl = document.getElementById('inventoryPanel');
+const inventoryGridEl = document.getElementById('inventoryGrid');
+const craftingGridEl = document.getElementById('craftingGrid');
+const inventoryCloseEl = document.getElementById('inventoryClose');
 
 // Touch/mobile detection
 const IS_TOUCH = (('ontouchstart' in window) || (navigator.maxTouchPoints>0) || (window.matchMedia && matchMedia('(pointer: coarse)').matches));
@@ -1095,6 +1101,7 @@ const STORAGE_KEY = 'voxel_world_v1';
 const PLAYER_KEY = 'voxel_player_v1';
 const TIME_KEY = 'voxel_time_phase_v1'; // stores phase in [0,1)
 const SETTINGS_KEY = 'voxel_settings_v1';
+const INVENTORY_KEY = 'voxel_inventory_v1';
 
 function bytesToBase64(bytes){
   let binary = '';
@@ -1395,11 +1402,11 @@ function scheduleSave(){
   if (saveTimer) clearTimeout(saveTimer);
   saveTimer = setTimeout(saveWorld, 1000);
 }
-window.addEventListener('beforeunload', ()=>{ saveWorld(); savePlayer(); saveTimePhase(); });
+window.addEventListener('beforeunload', ()=>{ saveWorld(); savePlayer(); saveTimePhase(); saveInventory(); });
 document.addEventListener('visibilitychange', ()=>{
   if (document.visibilityState === 'hidden'){
     // Persist state
-    saveWorld(); savePlayer(); saveTimePhase();
+    saveWorld(); savePlayer(); saveTimePhase(); saveInventory();
     // Pause all audio scheduling to avoid throttled/uneven timers
     stopMusic();
     stopLabPreview();
@@ -1527,6 +1534,69 @@ const BLOCK_COLOR = {
   [BLOCK.LEAF]:  '#2a5e1f',
   [BLOCK.LAMP]:  '#f2e48a',
 };
+
+const MAX_STACK = 99;
+function blockItemId(blockId){ return `block:${blockId}`; }
+
+const ITEM_DEFS = {
+  [blockItemId(BLOCK.GRASS)]: { name: 'Grass', color: BLOCK_COLOR[BLOCK.GRASS], block: BLOCK.GRASS },
+  [blockItemId(BLOCK.DIRT)]: { name: 'Dirt', color: BLOCK_COLOR[BLOCK.DIRT], block: BLOCK.DIRT },
+  [blockItemId(BLOCK.STONE)]: { name: 'Stone', color: BLOCK_COLOR[BLOCK.STONE], block: BLOCK.STONE },
+  [blockItemId(BLOCK.WATER)]: { name: 'Water', color: BLOCK_COLOR[BLOCK.WATER], block: BLOCK.WATER },
+  [blockItemId(BLOCK.SAND)]: { name: 'Sand', color: BLOCK_COLOR[BLOCK.SAND], block: BLOCK.SAND },
+  [blockItemId(BLOCK.ROCK)]: { name: 'Rock', color: BLOCK_COLOR[BLOCK.ROCK], block: BLOCK.ROCK },
+  [blockItemId(BLOCK.WOOD)]: { name: 'Wood', color: BLOCK_COLOR[BLOCK.WOOD], block: BLOCK.WOOD },
+  [blockItemId(BLOCK.LEAF)]: { name: 'Leaf', color: BLOCK_COLOR[BLOCK.LEAF], block: BLOCK.LEAF },
+  [blockItemId(BLOCK.LAMP)]: { name: 'Lamp', color: BLOCK_COLOR[BLOCK.LAMP], block: BLOCK.LAMP },
+  plank: { name: 'Planks', color: '#c9964a' },
+  stick: { name: 'Sticks', color: '#b77a38' },
+  pickaxe: { name: 'Basic Pickaxe', color: '#a8b2bd' },
+};
+
+const HARVEST_RULES = {
+  [BLOCK.GRASS]: { item: blockItemId(BLOCK.GRASS), amount: 1, hardness: 1 },
+  [BLOCK.DIRT]:  { item: blockItemId(BLOCK.DIRT), amount: 1, hardness: 1 },
+  [BLOCK.STONE]: { item: blockItemId(BLOCK.STONE), amount: 1, hardness: 3 },
+  [BLOCK.WATER]: { item: blockItemId(BLOCK.WATER), amount: 1, hardness: 1 },
+  [BLOCK.SAND]:  { item: blockItemId(BLOCK.SAND), amount: 1, hardness: 1 },
+  [BLOCK.ROCK]:  { item: blockItemId(BLOCK.ROCK), amount: 1, hardness: 4 },
+  [BLOCK.WOOD]:  { item: blockItemId(BLOCK.WOOD), amount: 1, hardness: 2 },
+  [BLOCK.LEAF]:  { item: blockItemId(BLOCK.LEAF), amount: 1, hardness: 1 },
+  [BLOCK.LAMP]:  { item: blockItemId(BLOCK.LAMP), amount: 1, hardness: 2 },
+};
+
+const CRAFT_RECIPES = [
+  {
+    id: 'planks',
+    name: 'Wood -> Planks',
+    in: { [blockItemId(BLOCK.WOOD)]: 1 },
+    out: { plank: 4 },
+  },
+  {
+    id: 'sticks',
+    name: 'Planks -> Sticks',
+    in: { plank: 2 },
+    out: { stick: 4 },
+  },
+  {
+    id: 'pickaxe',
+    name: 'Basic Pickaxe',
+    in: { [blockItemId(BLOCK.STONE)]: 3, stick: 2 },
+    out: { pickaxe: 1 },
+  },
+  {
+    id: 'wood-block',
+    name: 'Planks -> Wood',
+    in: { plank: 4 },
+    out: { [blockItemId(BLOCK.WOOD)]: 1 },
+  },
+  {
+    id: 'lamp',
+    name: 'Lamp Block',
+    in: { [blockItemId(BLOCK.ROCK)]: 1, stick: 1 },
+    out: { [blockItemId(BLOCK.LAMP)]: 1 },
+  },
+];
 
 function inBounds(x,y,z){
   return x>=0 && z>=0 && y>=0 && x<WORLD_W && z<WORLD_D && y<WORLD_H;
@@ -1714,6 +1784,13 @@ window.addEventListener('keydown', (e)=>{
     debugVisible = !debugVisible;
     if (debugEl) debugEl.classList.toggle('hidden', !debugVisible);
   }
+  if (e.code==='KeyI') {
+    e.preventDefault();
+    if (labEl && !labEl.classList.contains('hidden')) return;
+    toggleInventoryPanel();
+    return;
+  }
+  if (isInventoryOpen()) return;
   // If music lab is open, only allow 'G' to close it; ignore other game controls
   if (labEl && !labEl.classList.contains('hidden') && e.code !== 'KeyG') return;
   keys.add(e.code);
@@ -1791,6 +1868,7 @@ window.addEventListener('keydown', (e)=>{
   // Removed track 7
 });
 window.addEventListener('keyup', (e)=>{
+  if (isInventoryOpen()) return;
   if (labEl && !labEl.classList.contains('hidden')) return;
   keys.delete(e.code);
   if (e.code==='ShiftLeft' || e.code==='ShiftRight') sprint = false;
@@ -1801,7 +1879,7 @@ canvas.addEventListener('click', ()=>{
   resumeAudio();
   updateMusicLabel();
   // Do not lock pointer if music lab is open
-  if (!labEl || labEl.classList.contains('hidden')) {
+  if ((!labEl || labEl.classList.contains('hidden')) && !isInventoryOpen()) {
     canvas.requestPointerLock();
   }
 });
@@ -1834,6 +1912,7 @@ let touchMoveAccum = 0;
 
 function onTouchStart(ev){
   if (!IS_TOUCH) return;
+  if (isInventoryOpen()) return;
   if (labEl && !labEl.classList.contains('hidden')) return;
   const t = ev.touches[0]; if (!t) return;
   ev.preventDefault();
@@ -1877,36 +1956,263 @@ canvas.addEventListener('touchcancel', onTouchEnd, { passive:false });
 
 // Block selection and actions
 const placeOptions = [
-  { type:'block', id: BLOCK.GRASS, name:'Grass' },
-  { type:'block', id: BLOCK.DIRT,  name:'Dirt' },
-  { type:'block', id: BLOCK.STONE, name:'Stone' },
-  { type:'block', id: BLOCK.SAND,  name:'Sand' },
-  { type:'block', id: BLOCK.ROCK,  name:'Rock' },
-  { type:'block', id: BLOCK.WATER, name:'Water' },
-  { type:'block', id: BLOCK.WOOD,  name:'Wood' },
-  { type:'block', id: BLOCK.LEAF,  name:'Leaf' },
-  { type:'block', id: BLOCK.LAMP,  name:'Lamp' },
-  { type:'tree',               name:'Tree' },
+  { type:'block', id: BLOCK.GRASS, item: blockItemId(BLOCK.GRASS), name:'Grass' },
+  { type:'block', id: BLOCK.DIRT,  item: blockItemId(BLOCK.DIRT),  name:'Dirt' },
+  { type:'block', id: BLOCK.STONE, item: blockItemId(BLOCK.STONE), name:'Stone' },
+  { type:'block', id: BLOCK.SAND,  item: blockItemId(BLOCK.SAND),  name:'Sand' },
+  { type:'block', id: BLOCK.ROCK,  item: blockItemId(BLOCK.ROCK),  name:'Rock' },
+  { type:'block', id: BLOCK.WATER, item: blockItemId(BLOCK.WATER), name:'Water' },
+  { type:'block', id: BLOCK.WOOD,  item: blockItemId(BLOCK.WOOD),  name:'Wood' },
+  { type:'block', id: BLOCK.LEAF,  item: blockItemId(BLOCK.LEAF),  name:'Leaf' },
+  { type:'block', id: BLOCK.LAMP,  item: blockItemId(BLOCK.LAMP),  name:'Lamp' },
 ];
 let selectedIndex = 0;
+let inventory = {};
+let harvestTarget = null;
+let harvestStatusTimer = null;
+
+function itemName(itemId){
+  return (ITEM_DEFS[itemId] && ITEM_DEFS[itemId].name) || itemId;
+}
+
+function getItemCount(itemId){
+  return Math.max(0, inventory[itemId]|0);
+}
+
+function setItemCount(itemId, count){
+  const next = Math.max(0, Math.min(MAX_STACK, count|0));
+  if (next > 0) inventory[itemId] = next;
+  else delete inventory[itemId];
+}
+
+function addItem(itemId, amount=1, persist=true){
+  if (!ITEM_DEFS[itemId] || amount <= 0) return false;
+  setItemCount(itemId, getItemCount(itemId) + amount);
+  if (persist) {
+    saveInventory();
+    refreshInventoryUI();
+  }
+  return true;
+}
+
+function removeItem(itemId, amount=1, persist=true){
+  if (getItemCount(itemId) < amount) return false;
+  setItemCount(itemId, getItemCount(itemId) - amount);
+  if (persist) {
+    saveInventory();
+    refreshInventoryUI();
+  }
+  return true;
+}
+
+function hasIngredients(ingredients){
+  for (const itemId of Object.keys(ingredients)){
+    if (getItemCount(itemId) < ingredients[itemId]) return false;
+  }
+  return true;
+}
+
+function consumeIngredients(ingredients){
+  if (!hasIngredients(ingredients)) return false;
+  for (const itemId of Object.keys(ingredients)){
+    setItemCount(itemId, getItemCount(itemId) - ingredients[itemId]);
+  }
+  return true;
+}
+
+function saveInventory(){
+  try {
+    localStorage.setItem(INVENTORY_KEY, JSON.stringify({ version: 1, items: inventory }));
+  } catch (e) {
+    console.warn('Failed saving inventory:', e);
+  }
+}
+
+function loadInventory(){
+  try {
+    const s = localStorage.getItem(INVENTORY_KEY);
+    if (s) {
+      const obj = JSON.parse(s);
+      const items = obj && obj.items;
+      if (items && typeof items === 'object') {
+        inventory = {};
+        for (const itemId of Object.keys(items)){
+          if (ITEM_DEFS[itemId]) setItemCount(itemId, items[itemId]|0);
+        }
+        return true;
+      }
+    }
+  } catch (e) {
+    console.warn('Failed loading inventory:', e);
+  }
+  inventory = {};
+  addItem(blockItemId(BLOCK.DIRT), 12, false);
+  addItem(blockItemId(BLOCK.WOOD), 4, false);
+  addItem('stick', 2, false);
+  saveInventory();
+  return false;
+}
+
+function refreshInventoryUI(){
+  updateSelectedLabel();
+  renderHotbar();
+  renderInventoryPanel();
+}
+
 function updateSelectedLabel(){
   const opt = placeOptions[selectedIndex];
-  selectedEl.textContent = `Selected: ${opt.name}`;
+  const count = opt.item ? getItemCount(opt.item) : 0;
+  if (selectedEl) selectedEl.textContent = `Selected: ${opt.name} x${count}`;
   // Mobile: reflect in switch button label + outline color
   const btnSwitch = document.getElementById('btnSwitch');
   if (btnSwitch){
-    btnSwitch.textContent = opt.name;
+    btnSwitch.textContent = `${opt.name} ${count}`;
     let color = '#cccccc';
     if (opt.type === 'block') color = BLOCK_COLOR[opt.id] || color;
-    else if (opt.type === 'tree') color = BLOCK_COLOR[BLOCK.LEAF] || color;
     btnSwitch.style.borderColor = color;
   }
 }
-updateSelectedLabel();
+
+function renderHotbar(){
+  if (!hotbarEl) return;
+  hotbarEl.textContent = '';
+  for (let i=0; i<placeOptions.length; i++){
+    const opt = placeOptions[i];
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = `hotbar-slot${i === selectedIndex ? ' selected' : ''}`;
+    btn.title = `${opt.name} (${getItemCount(opt.item)})`;
+    btn.addEventListener('click', (e)=>{
+      e.preventDefault();
+      selectedIndex = i;
+      refreshInventoryUI();
+      savePlayer();
+    });
+    const swatch = document.createElement('span');
+    swatch.className = 'hotbar-swatch';
+    swatch.style.background = BLOCK_COLOR[opt.id] || '#cccccc';
+    const name = document.createElement('span');
+    name.textContent = opt.name;
+    const count = document.createElement('span');
+    count.className = 'hotbar-count';
+    count.textContent = String(getItemCount(opt.item));
+    btn.append(swatch, name, count);
+    hotbarEl.appendChild(btn);
+  }
+}
+
+function ingredientsText(ingredients){
+  return Object.keys(ingredients).map((itemId)=> `${itemName(itemId)} x${ingredients[itemId]}`).join(', ');
+}
+
+function outputsText(outputs){
+  return Object.keys(outputs).map((itemId)=> `${itemName(itemId)} x${outputs[itemId]}`).join(', ');
+}
+
+function craftRecipe(recipe){
+  if (!consumeIngredients(recipe.in)) {
+    showHarvestStatus(`Need ${ingredientsText(recipe.in)}`);
+    refreshInventoryUI();
+    return false;
+  }
+  for (const itemId of Object.keys(recipe.out)){
+    setItemCount(itemId, getItemCount(itemId) + recipe.out[itemId]);
+  }
+  saveInventory();
+  refreshInventoryUI();
+  showHarvestStatus(`Crafted ${outputsText(recipe.out)}`);
+  return true;
+}
+
+function renderInventoryPanel(){
+  if (inventoryGridEl){
+    inventoryGridEl.textContent = '';
+    for (const itemId of Object.keys(ITEM_DEFS)){
+      const count = getItemCount(itemId);
+      if (count <= 0) continue;
+      const def = ITEM_DEFS[itemId];
+      const item = document.createElement('div');
+      item.className = 'inventory-item';
+      const swatch = document.createElement('div');
+      swatch.className = 'item-swatch';
+      swatch.style.background = def.color || '#cccccc';
+      const body = document.createElement('div');
+      const name = document.createElement('div');
+      name.className = 'name';
+      name.textContent = def.name;
+      const amount = document.createElement('div');
+      amount.className = 'count';
+      amount.textContent = `Count: ${count}`;
+      body.append(name, amount);
+      item.append(swatch, body);
+      inventoryGridEl.appendChild(item);
+    }
+    if (!inventoryGridEl.children.length){
+      const empty = document.createElement('div');
+      empty.className = 'inventory-item';
+      empty.textContent = 'No resources yet';
+      inventoryGridEl.appendChild(empty);
+    }
+  }
+  if (craftingGridEl){
+    craftingGridEl.textContent = '';
+    for (const recipe of CRAFT_RECIPES){
+      const canCraft = hasIngredients(recipe.in);
+      const row = document.createElement('div');
+      row.className = `recipe${canCraft ? '' : ' disabled'}`;
+      const body = document.createElement('div');
+      const name = document.createElement('div');
+      name.className = 'name';
+      name.textContent = recipe.name;
+      const cost = document.createElement('div');
+      cost.className = 'cost';
+      cost.textContent = `${ingredientsText(recipe.in)} -> ${outputsText(recipe.out)}`;
+      body.append(name, cost);
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'btn';
+      btn.textContent = 'Craft';
+      btn.disabled = !canCraft;
+      btn.addEventListener('click', (e)=>{
+        e.preventDefault();
+        craftRecipe(recipe);
+      });
+      row.append(body, btn);
+      craftingGridEl.appendChild(row);
+    }
+  }
+}
+
+function isInventoryOpen(){
+  return !!(inventoryPanelEl && !inventoryPanelEl.classList.contains('hidden'));
+}
+
+function toggleInventoryPanel(force){
+  if (!inventoryPanelEl) return;
+  const open = typeof force === 'boolean' ? force : inventoryPanelEl.classList.contains('hidden');
+  inventoryPanelEl.classList.toggle('hidden', !open);
+  if (open) {
+    keys.clear();
+    sprint = false;
+    try { if (document.pointerLockElement) document.exitPointerLock(); } catch {}
+    renderInventoryPanel();
+  }
+}
+
+if (inventoryCloseEl) inventoryCloseEl.addEventListener('click', (e)=>{
+  e.preventDefault();
+  toggleInventoryPanel(false);
+});
+if (inventoryPanelEl) inventoryPanelEl.addEventListener('click', (e)=>{
+  if (e.target === inventoryPanelEl) toggleInventoryPanel(false);
+});
+
+loadInventory();
+refreshInventoryUI();
 // Apply any loaded selection from storage now that variables exist
 if (typeof window !== 'undefined' && window.__loadedSelectedIndex != null){
   selectedIndex = ((window.__loadedSelectedIndex|0)%placeOptions.length + placeOptions.length)%placeOptions.length;
-  updateSelectedLabel();
+  refreshInventoryUI();
   try { delete window.__loadedSelectedIndex; } catch {}
 }
 
@@ -1924,6 +2230,7 @@ function initMobileUI(){
   const btnAdd = document.getElementById('btnAdd');
   const btnRemove = document.getElementById('btnRemove');
   const btnSwitch = document.getElementById('btnSwitch');
+  const btnInventory = document.getElementById('btnInventory');
   const menuBtn = document.getElementById('menuBtn');
   const menuClose = document.getElementById('menuClose');
   const panel = document.getElementById('menuPanel');
@@ -1936,6 +2243,7 @@ function initMobileUI(){
   const mNextTr = document.getElementById('menuNextTrack');
   const mTrackLabel = document.getElementById('menuTrackLabel');
   const mFly = document.getElementById('menuFly');
+  const mInventory = document.getElementById('menuInventory');
   const mRespawn = document.getElementById('menuRespawn');
   const mSave = document.getElementById('menuSave');
   const mLoad = document.getElementById('menuLoad');
@@ -1963,8 +2271,9 @@ function initMobileUI(){
   if (btnRemove) btnRemove.addEventListener('click', (e)=>{ e.preventDefault(); breakBlockOnce(); });
   if (btnSwitch) btnSwitch.addEventListener('click', (e)=>{
     e.preventDefault();
-    selectedIndex = (selectedIndex+1)%placeOptions.length; updateSelectedLabel(); savePlayer();
+    selectedIndex = (selectedIndex+1)%placeOptions.length; refreshInventoryUI(); savePlayer();
   });
+  if (btnInventory) btnInventory.addEventListener('click', (e)=>{ e.preventDefault(); toggleInventoryPanel(true); });
 
   function updateMenuLabels(){
     const cloudNames = ['None','Wispy','Both','Puffy'];
@@ -1991,6 +2300,7 @@ function initMobileUI(){
   if (mPrevTr) mPrevTr.addEventListener('click', (e)=>{ e.preventDefault(); setTrack(currentTrackIndex-1); updateMenuLabels(); });
   if (mNextTr) mNextTr.addEventListener('click', (e)=>{ e.preventDefault(); setTrack(currentTrackIndex+1); updateMenuLabels(); });
   if (mFly) mFly.addEventListener('click', (e)=>{ e.preventDefault(); flyMode=!flyMode; if(!flyMode){ player.vel[1]=0; } saveSettings(); updateMenuLabels(); });
+  if (mInventory) mInventory.addEventListener('click', (e)=>{ e.preventDefault(); toggleInventoryPanel(true); closeMenu(); });
   if (mRespawn) mRespawn.addEventListener('click', (e)=>{ e.preventDefault(); respawn(); closeMenu(); });
   if (mSave) mSave.addEventListener('click', (e)=>{ e.preventDefault(); copyWorldCode(); });
   if (mLoad) mLoad.addEventListener('click', (e)=>{ e.preventDefault(); promptLoadWorldCode(); closeMenu(); });
@@ -2007,22 +2317,29 @@ function updateCloudsLabel(){
 window.addEventListener('keydown', (e)=>{
   if (e.code==='KeyQ' || e.code==='BracketLeft') {
     if (labEl && !labEl.classList.contains('hidden')) return;
-    selectedIndex = (selectedIndex-1+placeOptions.length)%placeOptions.length; updateSelectedLabel(); savePlayer();
+    if (isInventoryOpen()) return;
+    selectedIndex = (selectedIndex-1+placeOptions.length)%placeOptions.length; refreshInventoryUI(); savePlayer();
   }
   if (e.code==='KeyE' || e.code==='BracketRight') {
     if (labEl && !labEl.classList.contains('hidden')) return;
-    selectedIndex = (selectedIndex+1)%placeOptions.length; updateSelectedLabel(); savePlayer();
+    if (isInventoryOpen()) return;
+    selectedIndex = (selectedIndex+1)%placeOptions.length; refreshInventoryUI(); savePlayer();
   }
 });
 
 function doPlaceAt(x,y,z, hit){
   const opt = placeOptions[selectedIndex];
   if (opt.type === 'block'){
-    if (getBlock(x,y,z)===BLOCK.AIR){ setBlock(x,y,z, opt.id); sfxPlace(); }
-    return true;
-  }
-  if (opt.type === 'tree'){
-    placeTreeAt(x,y,z);
+    if (getBlock(x,y,z)!==BLOCK.AIR) return false;
+    if (!removeItem(opt.item, 1, false)) {
+      showHarvestStatus(`No ${opt.name} in inventory`);
+      refreshInventoryUI();
+      return false;
+    }
+    setBlock(x,y,z, opt.id);
+    saveInventory();
+    refreshInventoryUI();
+    showHarvestStatus(`Placed ${opt.name}`);
     sfxPlace();
     return true;
   }
@@ -2059,11 +2376,12 @@ function placeSelectedBlockOnce(){
         if (isTopFace && placingAtFeetCell){
           const newY = ty + 1 + 1e-3; // stand on top of the placed block
           if (!aabbIntersectsBlock(px, newY, pz)){
-            doPlaceAt(tx,ty,tz, hit);
-            player.pos[1] = newY;
-            player.vel[1] = 0;
-            player.onGround = true;
-            savePlayer();
+            if (doPlaceAt(tx,ty,tz, hit)){
+              player.pos[1] = newY;
+              player.vel[1] = 0;
+              player.onGround = true;
+              savePlayer();
+            }
           }
         }
       }
@@ -2081,15 +2399,56 @@ function breakBlockOnce(){
   ];
   const hit = raycast(camPos, lookDir, 6.0);
   if (hit){
-    setBlock(hit.x, hit.y, hit.z, BLOCK.AIR);
-    sfxBreak();
+    harvestBlockAt(hit.x, hit.y, hit.z);
   }
+}
+
+function showHarvestStatus(text, timeout=1400){
+  if (!harvestStatusEl) return;
+  harvestStatusEl.textContent = text;
+  harvestStatusEl.classList.remove('hidden');
+  if (harvestStatusTimer) clearTimeout(harvestStatusTimer);
+  harvestStatusTimer = setTimeout(()=>{
+    harvestStatusEl.classList.add('hidden');
+  }, timeout);
+}
+
+function harvestPowerForBlock(blockId){
+  const hasPickaxe = getItemCount('pickaxe') > 0;
+  if (hasPickaxe && (blockId === BLOCK.STONE || blockId === BLOCK.ROCK)) return 2;
+  return 1;
+}
+
+function harvestBlockAt(x,y,z){
+  const blockId = getBlock(x,y,z);
+  if (blockId === BLOCK.AIR) return false;
+  const rule = HARVEST_RULES[blockId] || { item: blockItemId(blockId), amount: 1, hardness: 1 };
+  const key = `${x},${y},${z},${blockId}`;
+  if (!harvestTarget || harvestTarget.key !== key){
+    harvestTarget = { key, progress: 0 };
+  }
+  const hardness = Math.max(1, rule.hardness|0);
+  harvestTarget.progress += harvestPowerForBlock(blockId);
+  const def = ITEM_DEFS[rule.item];
+  const name = def ? def.name : 'Block';
+  if (harvestTarget.progress >= hardness){
+    setBlock(x, y, z, BLOCK.AIR);
+    addItem(rule.item, rule.amount || 1, true);
+    harvestTarget = null;
+    showHarvestStatus(`Harvested ${name} x${rule.amount || 1}`);
+    sfxBreak();
+    return true;
+  }
+  showHarvestStatus(`${name}: ${Math.min(hardness, harvestTarget.progress)} / ${hardness}`, 2200);
+  sfxStep();
+  return false;
 }
 
 // Bind B to place where we're pointing (with standing-on-block allowance)
 window.addEventListener('keydown', (e)=>{
   if (e.code==='KeyB') {
     if (labEl && !labEl.classList.contains('hidden')) return;
+    if (isInventoryOpen()) return;
     e.preventDefault();
     placeSelectedBlockOnce();
   }
@@ -2100,12 +2459,15 @@ window.addEventListener('keydown', (e)=>{
   if (e.code==='KeyC') {
     e.preventDefault();
     if (labEl && !labEl.classList.contains('hidden')) return;
+    if (isInventoryOpen()) return;
     breakBlockOnce();
   }
 });
 
 function canPlaceAtFromHit(hit){
   if (!hit) return null;
+  const opt = placeOptions[selectedIndex];
+  if (!opt || opt.type !== 'block' || getItemCount(opt.item) <= 0) return null;
   const tx = hit.x + hit.face[0];
   const ty = hit.y + hit.face[1];
   const tz = hit.z + hit.face[2];
@@ -2180,7 +2542,15 @@ function placeBlockUnderPlayer(){
   if (!aabbIntersectsBlock(px, newY, pz)){
     const opt = placeOptions[selectedIndex];
     if (opt.type !== 'block') return false;
+    if (!removeItem(opt.item, 1, false)) {
+      showHarvestStatus(`No ${opt.name} in inventory`);
+      refreshInventoryUI();
+      return false;
+    }
     setBlock(bx, ty, bz, opt.id);
+    saveInventory();
+    refreshInventoryUI();
+    showHarvestStatus(`Placed ${opt.name}`);
     // Snap player on top
     player.pos[1] = newY;
     player.vel[1] = 0;
