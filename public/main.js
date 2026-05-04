@@ -12,6 +12,7 @@ const torchEl = document.getElementById('torch');
 const debugEl = document.getElementById('debug');
 const labEl = document.getElementById('musiclab');
 const harvestStatusEl = document.getElementById('harvestStatus');
+const objectiveEl = document.getElementById('objective');
 const hotbarEl = document.getElementById('hotbar');
 const inventoryPanelEl = document.getElementById('inventoryPanel');
 const inventoryGridEl = document.getElementById('inventoryGrid');
@@ -1102,6 +1103,7 @@ const PLAYER_KEY = 'voxel_player_v1';
 const TIME_KEY = 'voxel_time_phase_v1'; // stores phase in [0,1)
 const SETTINGS_KEY = 'voxel_settings_v1';
 const INVENTORY_KEY = 'voxel_inventory_v1';
+const OBJECTIVE_KEY = 'voxel_objectives_v1';
 
 function bytesToBase64(bytes){
   let binary = '';
@@ -1402,11 +1404,11 @@ function scheduleSave(){
   if (saveTimer) clearTimeout(saveTimer);
   saveTimer = setTimeout(saveWorld, 1000);
 }
-window.addEventListener('beforeunload', ()=>{ saveWorld(); savePlayer(); saveTimePhase(); saveInventory(); });
+window.addEventListener('beforeunload', ()=>{ saveWorld(); savePlayer(); saveTimePhase(); saveInventory(); saveObjectiveProgress(); });
 document.addEventListener('visibilitychange', ()=>{
   if (document.visibilityState === 'hidden'){
     // Persist state
-    saveWorld(); savePlayer(); saveTimePhase(); saveInventory();
+    saveWorld(); savePlayer(); saveTimePhase(); saveInventory(); saveObjectiveProgress();
     // Pause all audio scheduling to avoid throttled/uneven timers
     stopMusic();
     stopLabPreview();
@@ -1595,6 +1597,64 @@ const CRAFT_RECIPES = [
     name: 'Lamp Block',
     in: { [blockItemId(BLOCK.ROCK)]: 1, stick: 1 },
     out: { [blockItemId(BLOCK.LAMP)]: 1 },
+  },
+];
+
+const OBJECTIVES = [
+  {
+    id: 'harvest-wood',
+    title: 'Collect Wood',
+    detail: 'Get 1 Wood in your inventory.',
+    item: blockItemId(BLOCK.WOOD),
+    count: 1,
+  },
+  {
+    id: 'craft-planks',
+    title: 'Craft Planks',
+    detail: 'Open inventory with I and craft Wood into Planks.',
+    item: 'plank',
+    count: 4,
+  },
+  {
+    id: 'craft-sticks',
+    title: 'Craft Sticks',
+    detail: 'Craft Planks into Sticks for tool handles.',
+    item: 'stick',
+    count: 4,
+  },
+  {
+    id: 'harvest-stone',
+    title: 'Harvest Stone',
+    detail: 'Break stone blocks until you have 3 Stone.',
+    item: blockItemId(BLOCK.STONE),
+    count: 3,
+  },
+  {
+    id: 'craft-pickaxe',
+    title: 'Craft A Pickaxe',
+    detail: 'Craft a Basic Pickaxe from Stone and Sticks.',
+    item: 'pickaxe',
+    count: 1,
+  },
+  {
+    id: 'harvest-rock',
+    title: 'Harvest Rock',
+    detail: 'Use the pickaxe to collect 1 Rock.',
+    item: blockItemId(BLOCK.ROCK),
+    count: 1,
+  },
+  {
+    id: 'craft-lamp',
+    title: 'Craft A Lamp',
+    detail: 'Craft a Lamp Block from Rock and a Stick.',
+    item: blockItemId(BLOCK.LAMP),
+    count: 1,
+  },
+  {
+    id: 'place-lamp',
+    title: 'Place The Lamp',
+    detail: 'Select the Lamp hotbar slot and place it in the world.',
+    flag: 'placedLamp',
   },
 ];
 
@@ -1968,6 +2028,7 @@ const placeOptions = [
 ];
 let selectedIndex = 0;
 let inventory = {};
+let objectiveProgress = { index: 0, flags: {} };
 let harvestTarget = null;
 let harvestStatusTimer = null;
 
@@ -2053,7 +2114,90 @@ function loadInventory(){
   return false;
 }
 
+function saveObjectiveProgress(){
+  try {
+    localStorage.setItem(OBJECTIVE_KEY, JSON.stringify({
+      version: 1,
+      index: objectiveProgress.index|0,
+      flags: objectiveProgress.flags || {},
+    }));
+  } catch (e) {
+    console.warn('Failed saving objectives:', e);
+  }
+}
+
+function loadObjectiveProgress(){
+  try {
+    const s = localStorage.getItem(OBJECTIVE_KEY);
+    if (!s) return false;
+    const obj = JSON.parse(s);
+    if (!obj || typeof obj !== 'object') return false;
+    objectiveProgress = {
+      index: Math.max(0, Math.min(OBJECTIVES.length, obj.index|0)),
+      flags: (obj.flags && typeof obj.flags === 'object') ? obj.flags : {},
+    };
+    return true;
+  } catch (e) {
+    console.warn('Failed loading objectives:', e);
+    return false;
+  }
+}
+
+function getObjectiveState(obj){
+  if (!obj) return { done: true, current: 1, target: 1 };
+  if (obj.item) {
+    const current = getItemCount(obj.item);
+    return { done: current >= obj.count, current, target: obj.count };
+  }
+  if (obj.flag) {
+    const done = !!(objectiveProgress.flags && objectiveProgress.flags[obj.flag]);
+    return { done, current: done ? 1 : 0, target: 1 };
+  }
+  return { done: false, current: 0, target: 1 };
+}
+
+function updateObjectiveProgress(){
+  let advanced = false;
+  while (objectiveProgress.index < OBJECTIVES.length) {
+    const obj = OBJECTIVES[objectiveProgress.index];
+    if (!getObjectiveState(obj).done) break;
+    objectiveProgress.index += 1;
+    advanced = true;
+  }
+  if (advanced) saveObjectiveProgress();
+  renderObjective();
+}
+
+function markObjectiveFlag(flag){
+  if (!objectiveProgress.flags) objectiveProgress.flags = {};
+  if (!objectiveProgress.flags[flag]) {
+    objectiveProgress.flags[flag] = true;
+    saveObjectiveProgress();
+  }
+  updateObjectiveProgress();
+}
+
+function renderObjective(){
+  if (!objectiveEl) return;
+  if (objectiveProgress.index >= OBJECTIVES.length) {
+    objectiveEl.innerHTML = '<div class="objective-title objective-complete">Objectives Complete</div><div class="objective-progress">You have the basics: harvest, craft, and light your build.</div>';
+    return;
+  }
+  const obj = OBJECTIVES[objectiveProgress.index];
+  const state = getObjectiveState(obj);
+  const current = Math.min(state.current, state.target);
+  objectiveEl.textContent = '';
+  const title = document.createElement('div');
+  title.className = 'objective-title';
+  title.textContent = `Objective ${objectiveProgress.index + 1}/${OBJECTIVES.length}: ${obj.title}`;
+  const detail = document.createElement('div');
+  detail.className = 'objective-progress';
+  detail.textContent = `${obj.detail} (${current}/${state.target})`;
+  objectiveEl.append(title, detail);
+}
+
 function refreshInventoryUI(){
+  updateObjectiveProgress();
   updateSelectedLabel();
   renderHotbar();
   renderInventoryPanel();
@@ -2207,6 +2351,7 @@ if (inventoryPanelEl) inventoryPanelEl.addEventListener('click', (e)=>{
   if (e.target === inventoryPanelEl) toggleInventoryPanel(false);
 });
 
+loadObjectiveProgress();
 loadInventory();
 refreshInventoryUI();
 // Apply any loaded selection from storage now that variables exist
@@ -2339,6 +2484,7 @@ function doPlaceAt(x,y,z, hit){
     setBlock(x,y,z, opt.id);
     saveInventory();
     refreshInventoryUI();
+    if (opt.id === BLOCK.LAMP) markObjectiveFlag('placedLamp');
     showHarvestStatus(`Placed ${opt.name}`);
     sfxPlace();
     return true;
@@ -2550,6 +2696,7 @@ function placeBlockUnderPlayer(){
     setBlock(bx, ty, bz, opt.id);
     saveInventory();
     refreshInventoryUI();
+    if (opt.id === BLOCK.LAMP) markObjectiveFlag('placedLamp');
     showHarvestStatus(`Placed ${opt.name}`);
     // Snap player on top
     player.pos[1] = newY;

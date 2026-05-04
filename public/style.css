@@ -145,6 +145,39 @@ body.touch #mobileControls { display: block; }
 
 #harvestStatus.hidden { display: none; }
 
+#objective {
+  position: absolute;
+  left: 50%;
+  top: 12px;
+  transform: translateX(-50%);
+  width: min(420px, calc(100vw - 24px));
+  background: rgba(10,14,18,0.62);
+  border: 1px solid rgba(255,255,255,0.16);
+  border-radius: 8px;
+  padding: 8px 10px;
+  box-sizing: border-box;
+  font-size: 12px;
+  pointer-events: none;
+}
+
+.objective-title {
+  font-weight: 700;
+  margin-bottom: 3px;
+}
+
+.objective-progress {
+  color: #d7e1ea;
+}
+
+.objective-complete {
+  color: #f4d35e;
+}
+
+body.touch #objective {
+  top: 56px;
+  width: calc(100vw - 24px);
+}
+
 #hotbar {
   position: absolute;
   left: 50%;
