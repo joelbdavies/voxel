@@ -15,6 +15,7 @@
           <div>WASD: Move, Space: Jump, Shift: Sprint</div>
           <div>Double Space: Start fly (Space/Ctrl to ascend/descend; Double Ctrl: End)</div>
           <div>C: Break, B: Place (underfoot or crosshair)</div>
+          <div>X: Use chest</div>
           <div>[ and ] (or Q/E): Cycle hotbar block</div>
           <div>I: Inventory & crafting</div>
           <div>P: Save world (copy code), O: Load world (paste code)</div>
@@ -76,6 +77,7 @@
             <button id="btnAdd" class="btn action" aria-label="Add Block">＋</button>
             <button id="btnRemove" class="btn action" aria-label="Remove Block">−</button>
             <button id="btnSwitch" class="btn action" aria-label="Switch Block">Block</button>
+            <button id="btnUse" class="btn action" aria-label="Use">Use</button>
             <button id="btnInventory" class="btn action" aria-label="Inventory">Bag</button>
           </div>
         </div>
@@ -89,8 +91,28 @@
         </div>
         <div class="label">Resources</div>
         <div id="inventoryGrid" class="inventory-grid"></div>
+        <div class="label crafting-label">Objective History</div>
+        <div id="objectiveHistory" class="objective-history"></div>
         <div class="label crafting-label">Crafting</div>
         <div id="craftingGrid" class="crafting-grid"></div>
+      </div>
+    </div>
+    <div id="chestPanel" class="hidden">
+      <div class="panel">
+        <div class="row space">
+          <strong id="chestTitle">Chest</strong>
+          <button id="chestClose" class="btn">Close</button>
+        </div>
+        <div class="storage-layout">
+          <div>
+            <div class="label">Inventory</div>
+            <div id="chestPlayerGrid" class="inventory-grid"></div>
+          </div>
+          <div>
+            <div class="label">Chest</div>
+            <div id="chestStorageGrid" class="inventory-grid"></div>
+          </div>
+        </div>
       </div>
     </div>
     <div id="musiclab" class="hidden">
