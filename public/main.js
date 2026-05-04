@@ -642,6 +642,8 @@ const tileIndex = {
   wood: 7,
   leaf: 8,
   lamp: 9,
+  chest: 10,
+  ore: 11,
 };
 
 function drawTile(ctx, idx, color, borderColor){
@@ -682,6 +684,8 @@ drawTile(actx, tileIndex.wood, '#9b6b3d', '#5a3a1c');
 // Make leaves noticeably darker than grass for clear contrast
 drawTile(actx, tileIndex.leaf, '#2a5e1f', '#0e2a09');
 drawTile(actx, tileIndex.lamp, '#f2e48a', '#a07f2a');
+drawTile(actx, tileIndex.chest, '#b87832', '#5b3314');
+drawTile(actx, tileIndex.ore, '#7e8f96', '#2f464f');
 
 // Upload as GL texture
 const tex = gl.createTexture();
@@ -1094,6 +1098,20 @@ function allocSceneTarget(w, h){
 const WORLD_W = 64;
 const WORLD_H = 32;
 const WORLD_D = 64;
+const BLOCK_ID = {
+  AIR: 0,
+  GRASS: 1,
+  DIRT: 3,
+  STONE: 4,
+  WATER: 5,
+  SAND: 6,
+  ROCK: 7,
+  WOOD: 8,
+  LEAF: 9,
+  LAMP: 10,
+  CHEST: 11,
+  ORE: 12,
+};
 
 const blocks = new Uint8Array(WORLD_W * WORLD_H * WORLD_D); // 0=air, >0 block ids
 
@@ -1213,6 +1231,47 @@ function rleDecompress(u8, outLen){
   return out;
 }
 
+function hash2i(x,z){
+  let n = (x * 374761393 + z * 668265263) | 0;
+  n = (n ^ (n >>> 13)) | 0;
+  n = Math.imul(n, 1274126177);
+  return ((n ^ (n >>> 16)) >>> 0) / 4294967296;
+}
+
+function hash3i(x,y,z){
+  let n = (x * 73856093) ^ (y * 19349663) ^ (z * 83492791);
+  n = Math.imul(n ^ (n >>> 13), 1274126177);
+  return ((n ^ (n >>> 16)) >>> 0) / 4294967296;
+}
+
+function placeBaseTree(arr, x, y, z){
+  const h = 4 + ((hash2i(x+11,z-7) * 3)|0);
+  for (let i=0; i<h && y+i<WORLD_H; i++){
+    arr[idx(x,y+i,z)] = BLOCK_ID.WOOD;
+  }
+  const topY = y + h - 1;
+  for (let dy=-2; dy<=1; dy++){
+    const ly = topY + dy;
+    if (ly < y+2 || ly >= WORLD_H) continue;
+    const radius = dy === 1 ? 1 : dy === -2 ? 1 : 2;
+    for (let dz=-radius; dz<=radius; dz++){
+      for (let dx=-radius; dx<=radius; dx++){
+        if ((dx*dx + dz*dz) > radius*radius + 0.35) continue;
+        if (dx===0 && dz===0 && dy<=0) continue;
+        const lx = x+dx, lz = z+dz;
+        if (lx<1 || lz<1 || lx>=WORLD_W-1 || lz>=WORLD_D-1) continue;
+        if (arr[idx(lx,ly,lz)] === BLOCK_ID.AIR) arr[idx(lx,ly,lz)] = BLOCK_ID.LEAF;
+      }
+    }
+  }
+}
+
+function shouldPlaceBaseTree(x,z,h){
+  if (x < 4 || z < 4 || x > WORLD_W-5 || z > WORLD_D-5 || h <= WATER_LEVEL+1) return false;
+  if (((x * 3 + z * 5) % 7) !== 0) return false;
+  return hash2i(x,z) < 0.16;
+}
+
 // Build deterministic base world (same as initial generation)
 function buildBaseWorldArray(){
   const arr = new Uint8Array(blocks.length);
@@ -1222,16 +1281,26 @@ function buildBaseWorldArray(){
       for(let y=0; y<=h; y++){
         const isTop = y===h;
         let id = 0;
-        if (isTop) id = 1; // grass
-        else if (y >= h-2) id = 3; // dirt
-        else id = 4; // stone
+        if (isTop) id = BLOCK_ID.GRASS;
+        else if (y >= h-2) id = BLOCK_ID.DIRT;
+        else {
+          id = BLOCK_ID.STONE;
+          if (y >= h-6 && y <= h-2 && hash3i(x,y,z) < 0.055) id = BLOCK_ID.ROCK;
+          else if (y <= Math.max(3, h-8) && hash3i(x+17,y,z-23) < 0.035) id = BLOCK_ID.ORE;
+        }
         arr[idx(x,y,z)] = id;
       }
       if (h < WATER_LEVEL){
         for(let y=h+1; y<=WATER_LEVEL; y++){
-          arr[idx(x,y,z)] = 5; // water
+          arr[idx(x,y,z)] = BLOCK_ID.WATER;
         }
       }
+    }
+  }
+  for(let z=0; z<WORLD_D; z++){
+    for(let x=0; x<WORLD_W; x++){
+      const h = heightAt(x,z);
+      if (shouldPlaceBaseTree(x,z,h)) placeBaseTree(arr, x, h+1, z);
     }
   }
   return arr;
@@ -1474,25 +1543,7 @@ const WATER_LEVEL = 8;
 
 // Try to load world; otherwise generate and then save
 if (!loadWorld()){
-  for(let z=0; z<WORLD_D; z++){
-    for(let x=0; x<WORLD_W; x++){
-      const h = heightAt(x,z);
-      for(let y=0; y<=h; y++){
-        const isTop = y===h;
-        let id = 0;
-        if (isTop) id = 1; // grass
-        else if (y >= h-2) id = 3; // dirt
-        else id = 4; // stone
-        blocks[idx(x,y,z)] = id;
-      }
-      // water fill to water level if terrain below
-      if (h < WATER_LEVEL){
-        for(let y=h+1; y<=WATER_LEVEL; y++){
-          blocks[idx(x,y,z)] = 5; // water (opaque here)
-        }
-      }
-    }
-  }
+  blocks.set(buildBaseWorldArray());
   // initial save
   saveWorld();
 }
@@ -1500,16 +1551,7 @@ if (!loadWorld()){
 // Block type -> tile per face
 // ids: 0=air,1=grass,3=dirt,4=stone,5=water,6=sand,7=rock, 8=wood, 9=leaf, 10=lamp
 const BLOCK = {
-  AIR: 0,
-  GRASS: 1,
-  DIRT: 3,
-  STONE: 4,
-  WATER: 5,
-  SAND: 6,
-  ROCK: 7,
-  WOOD: 8,
-  LEAF: 9,
-  LAMP: 10,
+  ...BLOCK_ID,
 };
 
 const BLOCK_TILES = {
@@ -1522,6 +1564,8 @@ const BLOCK_TILES = {
   [BLOCK.WOOD]:  { top: tileIndex.wood, side: tileIndex.wood, bottom: tileIndex.wood },
   [BLOCK.LEAF]:  { top: tileIndex.leaf, side: tileIndex.leaf, bottom: tileIndex.leaf },
   [BLOCK.LAMP]:  { top: tileIndex.lamp, side: tileIndex.lamp, bottom: tileIndex.lamp },
+  [BLOCK.CHEST]: { top: tileIndex.chest, side: tileIndex.chest, bottom: tileIndex.wood },
+  [BLOCK.ORE]:   { top: tileIndex.ore, side: tileIndex.ore, bottom: tileIndex.ore },
 };
 
 // Representative colors for block outline/UI accents (match drawTile base colors)
@@ -1535,6 +1579,8 @@ const BLOCK_COLOR = {
   [BLOCK.WOOD]:  '#9b6b3d',
   [BLOCK.LEAF]:  '#2a5e1f',
   [BLOCK.LAMP]:  '#f2e48a',
+  [BLOCK.CHEST]: '#b87832',
+  [BLOCK.ORE]:   '#7e8f96',
 };
 
 const MAX_STACK = 99;
@@ -1550,21 +1596,27 @@ const ITEM_DEFS = {
   [blockItemId(BLOCK.WOOD)]: { name: 'Wood', color: BLOCK_COLOR[BLOCK.WOOD], block: BLOCK.WOOD },
   [blockItemId(BLOCK.LEAF)]: { name: 'Leaf', color: BLOCK_COLOR[BLOCK.LEAF], block: BLOCK.LEAF },
   [blockItemId(BLOCK.LAMP)]: { name: 'Lamp', color: BLOCK_COLOR[BLOCK.LAMP], block: BLOCK.LAMP },
+  [blockItemId(BLOCK.CHEST)]: { name: 'Chest', color: BLOCK_COLOR[BLOCK.CHEST], block: BLOCK.CHEST },
+  [blockItemId(BLOCK.ORE)]: { name: 'Ore', color: BLOCK_COLOR[BLOCK.ORE], block: BLOCK.ORE },
   plank: { name: 'Planks', color: '#c9964a' },
   stick: { name: 'Sticks', color: '#b77a38' },
-  pickaxe: { name: 'Basic Pickaxe', color: '#a8b2bd' },
+  wood_pickaxe: { name: 'Wooden Pickaxe', color: '#c9964a', toolTier: 1 },
+  stone_pickaxe: { name: 'Stone Pickaxe', color: '#a8b2bd', toolTier: 2 },
+  pickaxe: { name: 'Basic Pickaxe', color: '#a8b2bd', toolTier: 2 },
 };
 
 const HARVEST_RULES = {
-  [BLOCK.GRASS]: { item: blockItemId(BLOCK.GRASS), amount: 1, hardness: 1 },
-  [BLOCK.DIRT]:  { item: blockItemId(BLOCK.DIRT), amount: 1, hardness: 1 },
-  [BLOCK.STONE]: { item: blockItemId(BLOCK.STONE), amount: 1, hardness: 3 },
-  [BLOCK.WATER]: { item: blockItemId(BLOCK.WATER), amount: 1, hardness: 1 },
-  [BLOCK.SAND]:  { item: blockItemId(BLOCK.SAND), amount: 1, hardness: 1 },
-  [BLOCK.ROCK]:  { item: blockItemId(BLOCK.ROCK), amount: 1, hardness: 4 },
-  [BLOCK.WOOD]:  { item: blockItemId(BLOCK.WOOD), amount: 1, hardness: 2 },
-  [BLOCK.LEAF]:  { item: blockItemId(BLOCK.LEAF), amount: 1, hardness: 1 },
-  [BLOCK.LAMP]:  { item: blockItemId(BLOCK.LAMP), amount: 1, hardness: 2 },
+  [BLOCK.GRASS]: { item: blockItemId(BLOCK.GRASS), amount: 1, hardness: 1, toolTier: 0 },
+  [BLOCK.DIRT]:  { item: blockItemId(BLOCK.DIRT), amount: 1, hardness: 1, toolTier: 0 },
+  [BLOCK.STONE]: { item: blockItemId(BLOCK.STONE), amount: 1, hardness: 4, toolTier: 1 },
+  [BLOCK.WATER]: { item: blockItemId(BLOCK.WATER), amount: 1, hardness: 1, toolTier: 0 },
+  [BLOCK.SAND]:  { item: blockItemId(BLOCK.SAND), amount: 1, hardness: 1, toolTier: 0 },
+  [BLOCK.ROCK]:  { item: blockItemId(BLOCK.ROCK), amount: 1, hardness: 5, toolTier: 2 },
+  [BLOCK.WOOD]:  { item: blockItemId(BLOCK.WOOD), amount: 1, hardness: 2, toolTier: 0 },
+  [BLOCK.LEAF]:  { item: blockItemId(BLOCK.LEAF), amount: 1, hardness: 1, toolTier: 0 },
+  [BLOCK.LAMP]:  { item: blockItemId(BLOCK.LAMP), amount: 1, hardness: 2, toolTier: 0 },
+  [BLOCK.CHEST]: { item: blockItemId(BLOCK.CHEST), amount: 1, hardness: 2, toolTier: 0 },
+  [BLOCK.ORE]:   { item: blockItemId(BLOCK.ORE), amount: 1, hardness: 6, toolTier: 2 },
 };
 
 const CRAFT_RECIPES = [
@@ -1581,10 +1633,16 @@ const CRAFT_RECIPES = [
     out: { stick: 4 },
   },
   {
-    id: 'pickaxe',
-    name: 'Basic Pickaxe',
+    id: 'wood-pickaxe',
+    name: 'Wooden Pickaxe',
+    in: { plank: 3, stick: 2 },
+    out: { wood_pickaxe: 1 },
+  },
+  {
+    id: 'stone-pickaxe',
+    name: 'Stone Pickaxe',
     in: { [blockItemId(BLOCK.STONE)]: 3, stick: 2 },
-    out: { pickaxe: 1 },
+    out: { stone_pickaxe: 1 },
   },
   {
     id: 'wood-block',
@@ -1597,6 +1655,12 @@ const CRAFT_RECIPES = [
     name: 'Lamp Block',
     in: { [blockItemId(BLOCK.ROCK)]: 1, stick: 1 },
     out: { [blockItemId(BLOCK.LAMP)]: 1 },
+  },
+  {
+    id: 'chest',
+    name: 'Chest',
+    in: { plank: 6 },
+    out: { [blockItemId(BLOCK.CHEST)]: 1 },
   },
 ];
 
@@ -1623,23 +1687,30 @@ const OBJECTIVES = [
     count: 4,
   },
   {
+    id: 'craft-wood-pickaxe',
+    title: 'Craft A Wooden Pickaxe',
+    detail: 'Craft a Wooden Pickaxe from Planks and Sticks.',
+    item: 'wood_pickaxe',
+    count: 1,
+  },
+  {
     id: 'harvest-stone',
     title: 'Harvest Stone',
-    detail: 'Break stone blocks until you have 3 Stone.',
+    detail: 'Select the Wooden Pickaxe and break stone blocks until you have 3 Stone.',
     item: blockItemId(BLOCK.STONE),
     count: 3,
   },
   {
-    id: 'craft-pickaxe',
-    title: 'Craft A Pickaxe',
-    detail: 'Craft a Basic Pickaxe from Stone and Sticks.',
-    item: 'pickaxe',
+    id: 'craft-stone-pickaxe',
+    title: 'Craft A Stone Pickaxe',
+    detail: 'Craft a Stone Pickaxe from Stone and Sticks.',
+    item: 'stone_pickaxe',
     count: 1,
   },
   {
     id: 'harvest-rock',
     title: 'Harvest Rock',
-    detail: 'Use the pickaxe to collect 1 Rock.',
+    detail: 'Select the Stone Pickaxe and collect 1 Rock.',
     item: blockItemId(BLOCK.ROCK),
     count: 1,
   },
@@ -2025,6 +2096,9 @@ const placeOptions = [
   { type:'block', id: BLOCK.WOOD,  item: blockItemId(BLOCK.WOOD),  name:'Wood' },
   { type:'block', id: BLOCK.LEAF,  item: blockItemId(BLOCK.LEAF),  name:'Leaf' },
   { type:'block', id: BLOCK.LAMP,  item: blockItemId(BLOCK.LAMP),  name:'Lamp' },
+  { type:'block', id: BLOCK.CHEST, item: blockItemId(BLOCK.CHEST), name:'Chest' },
+  { type:'tool', item: 'wood_pickaxe', name:'Wood Pick' },
+  { type:'tool', item: 'stone_pickaxe', name:'Stone Pick' },
 ];
 let selectedIndex = 0;
 let inventory = {};
@@ -2213,6 +2287,7 @@ function updateSelectedLabel(){
     btnSwitch.textContent = `${opt.name} ${count}`;
     let color = '#cccccc';
     if (opt.type === 'block') color = BLOCK_COLOR[opt.id] || color;
+    else if (opt.item && ITEM_DEFS[opt.item]) color = ITEM_DEFS[opt.item].color || color;
     btnSwitch.style.borderColor = color;
   }
 }
@@ -2234,7 +2309,9 @@ function renderHotbar(){
     });
     const swatch = document.createElement('span');
     swatch.className = 'hotbar-swatch';
-    swatch.style.background = BLOCK_COLOR[opt.id] || '#cccccc';
+    swatch.style.background = opt.type === 'block'
+      ? (BLOCK_COLOR[opt.id] || '#cccccc')
+      : ((ITEM_DEFS[opt.item] && ITEM_DEFS[opt.item].color) || '#cccccc');
     const name = document.createElement('span');
     name.textContent = opt.name;
     const count = document.createElement('span');
@@ -2559,22 +2636,41 @@ function showHarvestStatus(text, timeout=1400){
   }, timeout);
 }
 
-function harvestPowerForBlock(blockId){
-  const hasPickaxe = getItemCount('pickaxe') > 0;
-  if (hasPickaxe && (blockId === BLOCK.STONE || blockId === BLOCK.ROCK)) return 2;
+function selectedToolTier(){
+  const opt = placeOptions[selectedIndex];
+  if (!opt || opt.type !== 'tool' || getItemCount(opt.item) <= 0) return 0;
+  const def = ITEM_DEFS[opt.item];
+  return (def && def.toolTier) || 0;
+}
+
+function neededToolName(tier){
+  if (tier >= 2) return 'Stone Pickaxe';
+  if (tier >= 1) return 'Wooden Pickaxe';
+  return 'Hand';
+}
+
+function harvestPowerForBlock(blockId, tier){
+  if (blockId === BLOCK.STONE && tier >= 1) return 2;
+  if ((blockId === BLOCK.ROCK || blockId === BLOCK.ORE) && tier >= 2) return 2;
   return 1;
 }
 
 function harvestBlockAt(x,y,z){
   const blockId = getBlock(x,y,z);
   if (blockId === BLOCK.AIR) return false;
-  const rule = HARVEST_RULES[blockId] || { item: blockItemId(blockId), amount: 1, hardness: 1 };
+  const rule = HARVEST_RULES[blockId] || { item: blockItemId(blockId), amount: 1, hardness: 1, toolTier: 0 };
+  const tier = selectedToolTier();
+  if (tier < (rule.toolTier || 0)){
+    const name = itemName(rule.item);
+    showHarvestStatus(`${name} needs ${neededToolName(rule.toolTier)}`, 1800);
+    return false;
+  }
   const key = `${x},${y},${z},${blockId}`;
   if (!harvestTarget || harvestTarget.key !== key){
     harvestTarget = { key, progress: 0 };
   }
   const hardness = Math.max(1, rule.hardness|0);
-  harvestTarget.progress += harvestPowerForBlock(blockId);
+  harvestTarget.progress += harvestPowerForBlock(blockId, tier);
   const def = ITEM_DEFS[rule.item];
   const name = def ? def.name : 'Block';
   if (harvestTarget.progress >= hardness){
