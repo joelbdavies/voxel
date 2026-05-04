@@ -76,6 +76,10 @@ Build a Survival Builder progression layer for Voxel Craft. A fresh player shoul
 - Existing world import/export should continue to work.
 - If chest state is not included in world code export initially, explicitly note that limitation and keep local persistence correct.
 
+## Implementation Note
+- Chest contents currently persist through `localStorage` using `voxel_chests_v1`.
+- World copy/paste codes continue to encode block data only. Chest block placement is included as world data, but chest contents are not included in exported world codes yet.
+
 ## Suggested Data Model
 - Add new block ids for chest and resources.
 - Extend item definitions for tool tiers, resources, and chest block.
@@ -108,4 +112,3 @@ Build a Survival Builder progression layer for Voxel Craft. A fresh player shoul
 - Large art pipeline changes.
 - Perfect shelter simulation.
 - Full chest/world-code export if local chest persistence is complete and the limitation is documented.
-
