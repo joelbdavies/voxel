@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "node server.js",
     "start": "node server.js",
+    "test": "node scripts/regression-tests.cjs",
     "build:single": "node scripts/bundle-single-html.cjs"
   }
 }

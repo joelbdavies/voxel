@@ -1279,8 +1279,7 @@ function shouldPlaceBaseTree(x,z,h){
   return hash2i(x,z) < 0.16;
 }
 
-// Build deterministic base world (same as initial generation)
-function buildBaseWorldArray(){
+function fillTerrainBaseArray({ resources=false, trees=false } = {}){
   const arr = new Uint8Array(blocks.length);
   for(let z=0; z<WORLD_D; z++){
     for(let x=0; x<WORLD_W; x++){
@@ -1292,8 +1291,8 @@ function buildBaseWorldArray(){
         else if (y >= h-2) id = BLOCK_ID.DIRT;
         else {
           id = BLOCK_ID.STONE;
-          if (y >= h-6 && y <= h-2 && hash3i(x,y,z) < 0.055) id = BLOCK_ID.ROCK;
-          else if (y <= Math.max(3, h-8) && hash3i(x+17,y,z-23) < 0.035) id = BLOCK_ID.ORE;
+          if (resources && y >= h-6 && y <= h-2 && hash3i(x,y,z) < 0.055) id = BLOCK_ID.ROCK;
+          else if (resources && y <= Math.max(3, h-8) && hash3i(x+17,y,z-23) < 0.035) id = BLOCK_ID.ORE;
         }
         arr[idx(x,y,z)] = id;
       }
@@ -1304,13 +1303,24 @@ function buildBaseWorldArray(){
       }
     }
   }
-  for(let z=0; z<WORLD_D; z++){
-    for(let x=0; x<WORLD_W; x++){
-      const h = heightAt(x,z);
-      if (shouldPlaceBaseTree(x,z,h)) placeBaseTree(arr, x, h+1, z);
+  if (trees){
+    for(let z=0; z<WORLD_D; z++){
+      for(let x=0; x<WORLD_W; x++){
+        const h = heightAt(x,z);
+        if (shouldPlaceBaseTree(x,z,h)) placeBaseTree(arr, x, h+1, z);
+      }
     }
   }
   return arr;
+}
+
+function buildLegacyBaseWorldArray(){
+  return fillTerrainBaseArray({ resources: false, trees: false });
+}
+
+// Build deterministic base world including Survival Builder resources.
+function buildBaseWorldArray(){
+  return fillTerrainBaseArray({ resources: true, trees: true });
 }
 
 function encodeDeltaFromBase(){
@@ -1334,8 +1344,7 @@ function encodeDeltaFromBase(){
   return new Uint8Array(out);
 }
 
-function decodeDeltaIntoWorld(body){
-  const base = buildBaseWorldArray();
+function decodeDeltaIntoWorld(body, base=buildBaseWorldArray()){
   blocks.set(base);
   // read count
   let i = 0; const r = readVarint(body, i); let count = r.value; i = r.next;
@@ -1351,17 +1360,17 @@ function decodeDeltaIntoWorld(body){
 // Encode world blocks → compact url-safe string
 function encodeWorldToCode(){
   // Option A: full RLE
-  const headerV2 = new Uint8Array([86,87,50, WORLD_W, WORLD_H, WORLD_D]); // 'V''W''2' + dims
+  const headerV3 = new Uint8Array([86,87,51, WORLD_W, WORLD_H, WORLD_D]); // 'V''W''3' + dims
   const fullBody = rleCompress(blocks);
-  const full = new Uint8Array(headerV2.length + 1 + fullBody.length);
-  full.set(headerV2, 0); full[headerV2.length] = 0; // mode=0 full
-  full.set(fullBody, headerV2.length+1);
+  const full = new Uint8Array(headerV3.length + 1 + fullBody.length);
+  full.set(headerV3, 0); full[headerV3.length] = 0; // mode=0 full
+  full.set(fullBody, headerV3.length+1);
 
   // Option B: delta from base world
   const deltaBytes = encodeDeltaFromBase();
-  const delta = new Uint8Array(headerV2.length + 1 + deltaBytes.length);
-  delta.set(headerV2, 0); delta[headerV2.length] = 1; // mode=1 delta
-  delta.set(deltaBytes, headerV2.length+1);
+  const delta = new Uint8Array(headerV3.length + 1 + deltaBytes.length);
+  delta.set(headerV3, 0); delta[headerV3.length] = 1; // mode=1 delta
+  delta.set(deltaBytes, headerV3.length+1);
 
   const a = b64urlEncode(full);
   const b = b64urlEncode(delta);
@@ -1379,7 +1388,7 @@ function decodeWorldFromCode(code){
     const decompressed = rleDecompress(body, blocks.length);
     if (decompressed.length !== blocks.length) throw new Error('Decompress mismatch');
     blocks.set(decompressed);
-  } else if (ver === 50) { // '2'
+  } else if (ver === 50 || ver === 51) { // '2' or '3'
     const mode = data[6];
     const body = data.subarray(7);
     if (mode === 0){
@@ -1387,7 +1396,8 @@ function decodeWorldFromCode(code){
       if (decompressed.length !== blocks.length) throw new Error('Decompress mismatch');
       blocks.set(decompressed);
     } else if (mode === 1){
-      decodeDeltaIntoWorld(body);
+      const base = ver === 50 ? buildLegacyBaseWorldArray() : buildBaseWorldArray();
+      decodeDeltaIntoWorld(body, base);
     } else {
       throw new Error('Unknown mode');
     }
@@ -2674,6 +2684,10 @@ function renderChestPanel(){
 
 function transferToChest(itemId){
   if (!openChestKey || getItemCount(itemId) <= 0) return false;
+  if (chestItemCount(openChestKey, itemId) >= MAX_STACK) {
+    showHarvestStatus('Chest stack is full');
+    return false;
+  }
   removeItem(itemId, 1, false);
   setChestItemCount(openChestKey, itemId, chestItemCount(openChestKey, itemId) + 1);
   saveInventory();
@@ -2686,6 +2700,10 @@ function transferToChest(itemId){
 
 function transferFromChest(itemId){
   if (!openChestKey || chestItemCount(openChestKey, itemId) <= 0) return false;
+  if (getItemCount(itemId) >= MAX_STACK) {
+    showHarvestStatus('Inventory stack is full');
+    return false;
+  }
   setChestItemCount(openChestKey, itemId, chestItemCount(openChestKey, itemId) - 1);
   addItem(itemId, 1, false);
   saveInventory();
@@ -2861,12 +2879,12 @@ function updateCloudsLabel(){
 window.addEventListener('keydown', (e)=>{
   if (e.code==='KeyQ' || e.code==='BracketLeft') {
     if (labEl && !labEl.classList.contains('hidden')) return;
-    if (isInventoryOpen()) return;
+    if (isInventoryOpen() || isChestOpen()) return;
     selectedIndex = (selectedIndex-1+placeOptions.length)%placeOptions.length; refreshInventoryUI(); savePlayer();
   }
   if (e.code==='KeyE' || e.code==='BracketRight') {
     if (labEl && !labEl.classList.contains('hidden')) return;
-    if (isInventoryOpen()) return;
+    if (isInventoryOpen() || isChestOpen()) return;
     selectedIndex = (selectedIndex+1)%placeOptions.length; refreshInventoryUI(); savePlayer();
   }
 });
@@ -2874,6 +2892,7 @@ window.addEventListener('keydown', (e)=>{
 function doPlaceAt(x,y,z, hit){
   const opt = placeOptions[selectedIndex];
   if (opt.type === 'block'){
+    if (!inBounds(x,y,z)) return false;
     if (getBlock(x,y,z)!==BLOCK.AIR) return false;
     if (!removeItem(opt.item, 1, false)) {
       showHarvestStatus(`No ${opt.name} in inventory`);
@@ -3043,7 +3062,7 @@ function harvestBlockAt(x,y,z){
 window.addEventListener('keydown', (e)=>{
   if (e.code==='KeyB') {
     if (labEl && !labEl.classList.contains('hidden')) return;
-    if (isInventoryOpen()) return;
+    if (isInventoryOpen() || isChestOpen()) return;
     e.preventDefault();
     placeSelectedBlockOnce();
   }
@@ -3054,7 +3073,7 @@ window.addEventListener('keydown', (e)=>{
   if (e.code==='KeyC') {
     e.preventDefault();
     if (labEl && !labEl.classList.contains('hidden')) return;
-    if (isInventoryOpen()) return;
+    if (isInventoryOpen() || isChestOpen()) return;
     breakBlockOnce();
   }
 });
