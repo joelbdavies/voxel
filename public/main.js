@@ -2241,8 +2241,13 @@ function setItemCount(itemId, count){
   else delete inventory[itemId];
 }
 
+function canAddItem(itemId, amount=1){
+  return !!ITEM_DEFS[itemId] && amount > 0 && getItemCount(itemId) + amount <= MAX_STACK;
+}
+
 function addItem(itemId, amount=1, persist=true){
   if (!ITEM_DEFS[itemId] || amount <= 0) return false;
+  if (!canAddItem(itemId, amount)) return false;
   setItemCount(itemId, getItemCount(itemId) + amount);
   if (persist) {
     saveInventory();
@@ -2264,6 +2269,13 @@ function removeItem(itemId, amount=1, persist=true){
 function hasIngredients(ingredients){
   for (const itemId of Object.keys(ingredients)){
     if (getItemCount(itemId) < ingredients[itemId]) return false;
+  }
+  return true;
+}
+
+function canFitOutputs(outputs){
+  for (const itemId of Object.keys(outputs)){
+    if (!canAddItem(itemId, outputs[itemId])) return false;
   }
   return true;
 }
@@ -2303,7 +2315,6 @@ function loadInventory(){
   }
   inventory = {};
   addItem(blockItemId(BLOCK.DIRT), 12, false);
-  addItem(blockItemId(BLOCK.WOOD), 4, false);
   addItem('stick', 2, false);
   saveInventory();
   return false;
@@ -2557,6 +2568,11 @@ function outputsText(outputs){
 }
 
 function craftRecipe(recipe){
+  if (!canFitOutputs(recipe.out)) {
+    showHarvestStatus(`No room for ${outputsText(recipe.out)}`);
+    refreshInventoryUI();
+    return false;
+  }
   if (!consumeIngredients(recipe.in)) {
     showHarvestStatus(`Need ${ingredientsText(recipe.in)}`);
     refreshInventoryUI();
@@ -2604,7 +2620,7 @@ function renderInventoryPanel(){
   if (craftingGridEl){
     craftingGridEl.textContent = '';
     for (const recipe of CRAFT_RECIPES){
-      const canCraft = hasIngredients(recipe.in);
+      const canCraft = hasIngredients(recipe.in) && canFitOutputs(recipe.out);
       const row = document.createElement('div');
       row.className = `recipe${canCraft ? '' : ' disabled'}`;
       const body = document.createElement('div');
@@ -3035,6 +3051,10 @@ function harvestBlockAt(x,y,z){
     showHarvestStatus(`${name} needs ${neededToolName(rule.toolTier)}`, 1800);
     return false;
   }
+  if (!canAddItem(rule.item, rule.amount || 1)){
+    showHarvestStatus(`${itemName(rule.item)} stack is full`, 1800);
+    return false;
+  }
   const key = `${x},${y},${z},${blockId}`;
   if (!harvestTarget || harvestTarget.key !== key){
     harvestTarget = { key, progress: 0 };
@@ -3046,7 +3066,7 @@ function harvestBlockAt(x,y,z){
   if (harvestTarget.progress >= hardness){
     setBlock(x, y, z, BLOCK.AIR);
     if (blockId === BLOCK.CHEST) deleteChestAt(x,y,z);
-    addItem(rule.item, rule.amount || 1, true);
+    if (!addItem(rule.item, rule.amount || 1, true)) return false;
     harvestTarget = null;
     updateShelterProgress();
     showHarvestStatus(`Harvested ${name} x${rule.amount || 1}`);

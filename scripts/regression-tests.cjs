@@ -18,6 +18,12 @@ function functionBody(name){
   return between(`function ${name}`, '\n}\n\n');
 }
 
+function assertBefore(body, earlier, later, message){
+  assert.notStrictEqual(body.indexOf(earlier), -1, `Missing expected code: ${earlier}`);
+  assert.notStrictEqual(body.indexOf(later), -1, `Missing expected code: ${later}`);
+  assert(body.indexOf(earlier) < body.indexOf(later), message);
+}
+
 // Legacy V2 delta world codes must decode against the pre-Survival Builder base,
 // while newly exported V3 delta codes use the current resource/tree base.
 assert(source.includes('const headerV3 = new Uint8Array([86,87,51'), 'World exports should use VW3 after changing the delta base');
@@ -58,5 +64,85 @@ assert(keyCHandler.includes('isInventoryOpen() || isChestOpen()'), 'C/break hotk
 // Placement must reject out-of-bounds coordinates before consuming inventory.
 const doPlaceAt = functionBody('doPlaceAt');
 assert(doPlaceAt.indexOf('if (!inBounds(x,y,z)) return false;') < doPlaceAt.indexOf('removeItem(opt.item, 1, false)'), 'Placement should validate bounds before consuming inventory');
+
+// Fresh starts should not skip the first progression step by seeding Wood.
+const loadInventory = functionBody('loadInventory');
+assert(!loadInventory.includes('addItem(blockItemId(BLOCK.WOOD)'), 'Fresh inventory should not seed Wood before the Collect Wood objective');
+assert(loadInventory.includes('addItem(blockItemId(BLOCK.DIRT), 12, false)'), 'Fresh inventory should still seed safe building material');
+
+// addItem must refuse overflow instead of clamping and reporting success.
+const addItem = functionBody('addItem');
+assertBefore(addItem, 'if (!canAddItem(itemId, amount)) return false;', 'setItemCount(itemId, getItemCount(itemId) + amount);', 'addItem should reject full stacks before mutation');
+
+function simulateAdd({ current, amount }){
+  const MAX_STACK = 99;
+  if (amount <= 0 || current + amount > MAX_STACK) return { ok: false, count: current };
+  return { ok: true, count: current + amount };
+}
+
+assert.deepStrictEqual(simulateAdd({ current: 99, amount: 1 }), { ok: false, count: 99 });
+assert.deepStrictEqual(simulateAdd({ current: 98, amount: 1 }), { ok: true, count: 99 });
+
+// Harvesting must check capacity before removing the block from the world.
+const harvestBlockAt = functionBody('harvestBlockAt');
+assertBefore(harvestBlockAt, 'if (!canAddItem(rule.item, rule.amount || 1))', 'setBlock(x, y, z, BLOCK.AIR);', 'Harvest should reject full output stacks before removing the block');
+assertBefore(harvestBlockAt, 'if (!canAddItem(rule.item, rule.amount || 1))', 'harvestTarget.progress += harvestPowerForBlock(blockId, tier);', 'Harvest should reject full output stacks before adding break progress');
+
+// Crafting must check output capacity before consuming inputs, and recipe buttons
+// should be disabled when outputs cannot fit.
+const craftRecipe = functionBody('craftRecipe');
+assertBefore(craftRecipe, 'if (!canFitOutputs(recipe.out))', 'if (!consumeIngredients(recipe.in))', 'Crafting should reject full output stacks before consuming inputs');
+const renderInventoryPanel = functionBody('renderInventoryPanel');
+assert(renderInventoryPanel.includes('hasIngredients(recipe.in) && canFitOutputs(recipe.out)'), 'Recipe buttons should require both ingredients and output capacity');
+
+function simulateCraft({ inputs, outputs, inventory }){
+  const MAX_STACK = 99;
+  for (const [itemId, count] of Object.entries(outputs)){
+    if ((inventory[itemId] || 0) + count > MAX_STACK) return { ok: false, inventory: { ...inventory } };
+  }
+  for (const [itemId, count] of Object.entries(inputs)){
+    if ((inventory[itemId] || 0) < count) return { ok: false, inventory: { ...inventory } };
+  }
+  const next = { ...inventory };
+  for (const [itemId, count] of Object.entries(inputs)) next[itemId] -= count;
+  for (const [itemId, count] of Object.entries(outputs)) next[itemId] = (next[itemId] || 0) + count;
+  return { ok: true, inventory: next };
+}
+
+assert.deepStrictEqual(
+  simulateCraft({ inputs: { 'block:8': 1 }, outputs: { plank: 4 }, inventory: { 'block:8': 2, plank: 98 } }),
+  { ok: false, inventory: { 'block:8': 2, plank: 98 } },
+  'Wood -> Planks should not consume Wood when Planks cannot fit'
+);
+assert.deepStrictEqual(
+  simulateCraft({ inputs: { 'block:8': 1 }, outputs: { plank: 4 }, inventory: { 'block:8': 2, plank: 95 } }),
+  { ok: true, inventory: { 'block:8': 1, plank: 99 } },
+  'Wood -> Planks should craft when the output stack exactly fits'
+);
+
+// Progression/building coverage: required Survival Builder milestones must be
+// present in the objective chain and supported by concrete mechanics.
+const objectivesBlock = between('const OBJECTIVES = [', '];\n\nfunction inBounds');
+for (const text of [
+  'Collect Wood',
+  'Craft A Wooden Pickaxe',
+  'Harvest Stone',
+  'Craft A Stone Pickaxe',
+  'Harvest Rock Or Ore',
+  'Craft A Lamp',
+  'Craft A Chest',
+  'Place The Chest',
+  'Light The Chest',
+  'Build A Simple Shelter',
+]){
+  assert(objectivesBlock.includes(text), `Missing progression objective: ${text}`);
+}
+assert(source.includes("wood_pickaxe: { name: 'Wooden Pickaxe'"), 'Wooden Pickaxe item should exist');
+assert(source.includes("stone_pickaxe: { name: 'Stone Pickaxe'"), 'Stone Pickaxe item should exist');
+assert(source.includes('function lampNearChestExists()'), 'Lamp-near-chest objective should have a detector');
+assert(source.includes('function shelterExists()'), 'Shelter objective should have a detector');
+assert(source.includes('function createChestAt'), 'Chest placement should create persistent storage');
+assert(source.includes('function transferToChest'), 'Chest UI should support storing items');
+assert(source.includes('function transferFromChest'), 'Chest UI should support taking items');
 
 console.log('Regression tests passed');
