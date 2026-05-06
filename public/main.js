@@ -1323,6 +1323,17 @@ function buildBaseWorldArray(){
   return fillTerrainBaseArray({ resources: true, trees: true });
 }
 
+function migrateSurvivalResourcesIntoWorld(){
+  const legacy = buildLegacyBaseWorldArray();
+  const upgraded = buildBaseWorldArray();
+  for (let i=0; i<blocks.length; i++){
+    if (blocks[i] === legacy[i] && upgraded[i] !== legacy[i]) {
+      blocks[i] = upgraded[i];
+    }
+  }
+  worldDirty = true;
+}
+
 function encodeDeltaFromBase(){
   const base = buildBaseWorldArray();
   const out = [];
@@ -1430,7 +1441,9 @@ function promptLoadWorldCode(){
   if (!str) return;
   try {
     decodeWorldFromCode(str.trim());
+    resetChestsForCurrentWorld();
     saveWorld();
+    saveChests();
     // Ensure player isn't trapped in blocks after load
     ensurePlayerNotStuck();
     alert('World loaded!');
@@ -1444,6 +1457,7 @@ function saveWorld(){
   try {
     const payload = {
       w: WORLD_W, h: WORLD_H, d: WORLD_D,
+      survivalBuilderVersion: 1,
       data: bytesToBase64(blocks)
     };
     localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
@@ -1460,6 +1474,10 @@ function loadWorld(){
     const arr = base64ToBytes(obj.data);
     if (arr.length !== blocks.length) return false;
     blocks.set(arr);
+    if ((obj.survivalBuilderVersion|0) < 1) {
+      migrateSurvivalResourcesIntoWorld();
+      saveWorld();
+    }
     return true;
   } catch (e) {
     console.warn('Failed loading world:', e);
@@ -2390,6 +2408,14 @@ function createChestAt(x,y,z){
 function deleteChestAt(x,y,z){
   delete chests[chestKey(x,y,z)];
   saveChests();
+}
+
+function resetChestsForCurrentWorld(){
+  const next = {};
+  for (const chest of collectChestPositions()){
+    next[chestKey(chest.x, chest.y, chest.z)] = {};
+  }
+  chests = next;
 }
 
 function saveObjectiveProgress(){

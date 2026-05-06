@@ -29,6 +29,10 @@ function assertBefore(body, earlier, later, message){
 assert(source.includes('const headerV3 = new Uint8Array([86,87,51'), 'World exports should use VW3 after changing the delta base');
 assert(source.includes('function buildLegacyBaseWorldArray()'), 'Legacy terrain base should be available for old delta imports');
 assert(source.includes('const base = ver === 50 ? buildLegacyBaseWorldArray() : buildBaseWorldArray();'), 'V2 delta imports should use the legacy base');
+assert(source.includes('function migrateSurvivalResourcesIntoWorld()'), 'Old local saves should have a Survival Builder resource migration');
+const loadWorld = functionBody('loadWorld');
+assert(loadWorld.includes('survivalBuilderVersion'), 'Saved worlds should carry a Survival Builder version marker');
+assert(loadWorld.includes('migrateSurvivalResourcesIntoWorld();'), 'Old saved worlds should be migrated before progression starts');
 
 // Chest transfers must not mutate the source stack when the destination stack is full.
 const transferToChest = functionBody('transferToChest');
@@ -144,5 +148,11 @@ assert(source.includes('function shelterExists()'), 'Shelter objective should ha
 assert(source.includes('function createChestAt'), 'Chest placement should create persistent storage');
 assert(source.includes('function transferToChest'), 'Chest UI should support storing items');
 assert(source.includes('function transferFromChest'), 'Chest UI should support taking items');
+
+// Imported world codes are block-only, so local chest contents must be reset
+// to avoid leaking stale local storage into shared chest coordinates.
+const promptLoadWorldCode = functionBody('promptLoadWorldCode');
+assertBefore(promptLoadWorldCode, 'resetChestsForCurrentWorld();', 'saveWorld();', 'Imported worlds should reset local chest contents before saving');
+assert(source.includes('function resetChestsForCurrentWorld()'), 'Chest reset helper should exist for imported worlds');
 
 console.log('Regression tests passed');
