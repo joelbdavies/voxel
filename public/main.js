@@ -1431,6 +1431,7 @@ function decodeWorldFromCode(code){
   } else {
     throw new Error('Unknown version');
   }
+  if (ver < 51) migrateSurvivalResourcesIntoWorld();
   worldDirty = true;
 }
 
