@@ -1327,11 +1327,27 @@ function migrateSurvivalResourcesIntoWorld(){
   const legacy = buildLegacyBaseWorldArray();
   const upgraded = buildBaseWorldArray();
   for (let i=0; i<blocks.length; i++){
-    if (blocks[i] === legacy[i] && upgraded[i] !== legacy[i]) {
+    if (legacy[i] !== BLOCK_ID.AIR && blocks[i] === legacy[i] && upgraded[i] !== legacy[i]) {
       blocks[i] = upgraded[i];
     }
   }
-  worldDirty = true;
+  migrateLegacyWoodSourcesIntoWorld(legacy);
+}
+
+function migrateLegacyWoodSourcesIntoWorld(legacy){
+  for(let z=0; z<WORLD_D; z++){
+    for(let x=0; x<WORLD_W; x++){
+      const h = heightAt(x,z);
+      if (!shouldPlaceBaseTree(x,z,h)) continue;
+      const ground = idx(x,h,z);
+      if (h+1 >= WORLD_H) continue;
+      const above = idx(x,h+1,z);
+      if (blocks[ground] !== legacy[ground]) continue;
+      if (legacy[ground] !== BLOCK_ID.GRASS) continue;
+      if (blocks[above] !== legacy[above] || legacy[above] !== BLOCK_ID.AIR) continue;
+      blocks[ground] = BLOCK_ID.WOOD;
+    }
+  }
 }
 
 function encodeDeltaFromBase(){

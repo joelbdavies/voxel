@@ -33,6 +33,43 @@ assert(source.includes('function migrateSurvivalResourcesIntoWorld()'), 'Old loc
 const loadWorld = functionBody('loadWorld');
 assert(loadWorld.includes('survivalBuilderVersion'), 'Saved worlds should carry a Survival Builder version marker');
 assert(loadWorld.includes('migrateSurvivalResourcesIntoWorld();'), 'Old saved worlds should be migrated before progression starts');
+const migrateSurvivalResourcesIntoWorld = functionBody('migrateSurvivalResourcesIntoWorld');
+assert(!migrateSurvivalResourcesIntoWorld.includes('worldDirty = true'), 'Startup migration must not touch worldDirty before it is initialized');
+assert(migrateSurvivalResourcesIntoWorld.includes('legacy[i] !== BLOCK_ID.AIR'), 'Migration should not inject new tree blocks into legacy saved-world air');
+assert(source.includes('function migrateLegacyWoodSourcesIntoWorld(legacy)'), 'Old saved worlds should still receive a safe terrain-cell wood source');
+
+function simulateMigrationCell({ current, legacy, upgraded }){
+  if (legacy !== 0 && current === legacy && upgraded !== legacy) return upgraded;
+  return current;
+}
+
+function simulateLegacyWoodSource({ ground, legacyGround, above, legacyAbove, isTreeSite }){
+  if (!isTreeSite) return ground;
+  if (ground !== legacyGround || legacyGround !== 1) return ground;
+  if (above !== legacyAbove || legacyAbove !== 0) return ground;
+  return 8;
+}
+
+assert.strictEqual(
+  simulateMigrationCell({ current: 0, legacy: 0, upgraded: 8 }),
+  0,
+  'Migration should leave old saved air unchanged even when the upgraded base has a tree trunk there'
+);
+assert.strictEqual(
+  simulateMigrationCell({ current: 4, legacy: 4, upgraded: 7 }),
+  7,
+  'Migration should still add rock resources into untouched legacy stone'
+);
+assert.strictEqual(
+  simulateLegacyWoodSource({ ground: 1, legacyGround: 1, above: 0, legacyAbove: 0, isTreeSite: true }),
+  8,
+  'Legacy saves should get a harvestable wood source by replacing untouched grass at tree sites'
+);
+assert.strictEqual(
+  simulateLegacyWoodSource({ ground: 1, legacyGround: 1, above: 3, legacyAbove: 0, isTreeSite: true }),
+  1,
+  'Legacy wood-source migration should not alter terrain below player-built blocks'
+);
 
 // Chest transfers must not mutate the source stack when the destination stack is full.
 const transferToChest = functionBody('transferToChest');
