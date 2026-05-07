@@ -132,16 +132,116 @@ body.touch #mobileControls { display: block; }
   font-size: 12px;
 }
 
-#music {
+#harvestStatus {
   position: absolute;
   right: 12px; top: 58px;
+  min-width: 160px;
   background: rgba(0,0,0,0.4);
   padding: 8px 10px;
   border-radius: 6px;
   font-size: 12px;
+  text-align: right;
 }
 
-#clouds {
+#harvestStatus.hidden { display: none; }
+
+#objective {
+  position: absolute;
+  left: 50%;
+  top: 12px;
+  transform: translateX(-50%);
+  width: min(420px, calc(100vw - 24px));
+  background: rgba(10,14,18,0.62);
+  border: 1px solid rgba(255,255,255,0.16);
+  border-radius: 8px;
+  padding: 8px 10px;
+  box-sizing: border-box;
+  font-size: 12px;
+  pointer-events: none;
+}
+
+.objective-title {
+  font-weight: 700;
+  margin-bottom: 3px;
+}
+
+.objective-progress {
+  color: #d7e1ea;
+}
+
+.objective-complete {
+  color: #f4d35e;
+}
+
+.objective-history {
+  display: grid;
+  gap: 5px;
+  font-size: 12px;
+  color: #d7e1ea;
+}
+
+.objective-history .done {
+  padding: 6px 8px;
+  border: 1px solid #2a2f36;
+  border-radius: 6px;
+  background: #151b21;
+}
+
+body.touch #objective {
+  top: 56px;
+  width: calc(100vw - 24px);
+}
+
+#hotbar {
+  position: absolute;
+  left: 50%;
+  bottom: 14px;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 6px;
+  max-width: min(620px, 72vw);
+  padding: 6px;
+  border-radius: 8px;
+  background: rgba(10,14,18,0.55);
+  pointer-events: auto;
+}
+
+.hotbar-slot {
+  width: 52px;
+  height: 52px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  border: 1px solid rgba(255,255,255,0.18);
+  border-radius: 6px;
+  background: rgba(18,24,30,0.78);
+  color: #eaeaea;
+  padding: 5px;
+  font-size: 10px;
+  line-height: 1.1;
+  text-align: left;
+  cursor: pointer;
+  box-sizing: border-box;
+}
+
+.hotbar-slot.selected {
+  border-color: #f4d35e;
+  box-shadow: 0 0 0 2px rgba(244,211,94,0.25);
+}
+
+.hotbar-swatch {
+  width: 18px;
+  height: 18px;
+  border-radius: 3px;
+  border: 1px solid rgba(255,255,255,0.32);
+}
+
+.hotbar-count {
+  align-self: flex-end;
+  font-weight: 700;
+}
+
+#music {
   position: absolute;
   right: 12px; top: 104px;
   background: rgba(0,0,0,0.4);
@@ -150,9 +250,18 @@ body.touch #mobileControls { display: block; }
   font-size: 12px;
 }
 
-#torch {
+#clouds {
   position: absolute;
   right: 12px; top: 150px;
+  background: rgba(0,0,0,0.4);
+  padding: 8px 10px;
+  border-radius: 6px;
+  font-size: 12px;
+}
+
+#torch {
+  position: absolute;
+  right: 12px; top: 196px;
   background: rgba(0,0,0,0.4);
   padding: 8px 10px;
   border-radius: 6px;
@@ -179,6 +288,116 @@ body.touch #mobileControls { display: block; }
   color: rgba(255,255,255,0.9);
   text-shadow: 0 0 2px rgba(0,0,0,0.8);
 }
+
+#inventoryPanel.hidden { display: none; }
+#chestPanel.hidden { display: none; }
+#inventoryPanel,
+#chestPanel {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: auto;
+  z-index: 11000;
+}
+
+#inventoryPanel .panel,
+#chestPanel .panel {
+  width: min(760px, 94vw);
+  max-height: min(680px, 88vh);
+  overflow: auto;
+  background: #101418;
+  color: #eaeaea;
+  border: 1px solid #2a2f36;
+  border-radius: 8px;
+  padding: 12px;
+  box-shadow: 0 10px 40px rgba(0,0,0,0.6);
+}
+
+#inventoryPanel .row,
+#chestPanel .row { display: flex; gap: 12px; align-items: center; margin: 8px 0; flex-wrap: wrap; }
+#inventoryPanel .row.space,
+#chestPanel .row.space { justify-content: space-between; }
+#inventoryPanel .label,
+#chestPanel .label { margin: 10px 0 6px; opacity: 0.8; font-size: 12px; }
+
+.storage-layout {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+@media (max-width: 700px) {
+  .storage-layout {
+    grid-template-columns: 1fr;
+  }
+}
+
+.inventory-grid,
+.crafting-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(132px, 1fr));
+  gap: 8px;
+}
+
+.inventory-item,
+.recipe {
+  min-height: 62px;
+  background: #151b21;
+  border: 1px solid #2a2f36;
+  border-radius: 6px;
+  padding: 8px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  box-sizing: border-box;
+}
+
+.inventory-item.storage-row {
+  justify-content: space-between;
+}
+
+.inventory-item .btn {
+  flex: 0 0 auto;
+  padding: 6px 8px;
+}
+
+.inventory-item .name,
+.recipe .name {
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.inventory-item .count,
+.recipe .cost {
+  font-size: 12px;
+  color: #cbd3db;
+}
+
+.item-swatch {
+  width: 28px;
+  height: 28px;
+  border-radius: 4px;
+  border: 1px solid rgba(255,255,255,0.25);
+  flex: 0 0 auto;
+}
+
+.recipe {
+  justify-content: space-between;
+}
+
+.recipe .btn {
+  flex: 0 0 auto;
+  padding: 6px 8px;
+}
+
+.recipe.disabled {
+  opacity: 0.48;
+}
+
+.crafting-label { margin-top: 16px; }
 
 #musiclab.hidden { display: none; }
 #musiclab {

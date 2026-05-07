@@ -11,6 +11,19 @@ const musicEl = document.getElementById('music');
 const torchEl = document.getElementById('torch');
 const debugEl = document.getElementById('debug');
 const labEl = document.getElementById('musiclab');
+const harvestStatusEl = document.getElementById('harvestStatus');
+const objectiveEl = document.getElementById('objective');
+const hotbarEl = document.getElementById('hotbar');
+const inventoryPanelEl = document.getElementById('inventoryPanel');
+const inventoryGridEl = document.getElementById('inventoryGrid');
+const objectiveHistoryEl = document.getElementById('objectiveHistory');
+const craftingGridEl = document.getElementById('craftingGrid');
+const inventoryCloseEl = document.getElementById('inventoryClose');
+const chestPanelEl = document.getElementById('chestPanel');
+const chestTitleEl = document.getElementById('chestTitle');
+const chestPlayerGridEl = document.getElementById('chestPlayerGrid');
+const chestStorageGridEl = document.getElementById('chestStorageGrid');
+const chestCloseEl = document.getElementById('chestClose');
 
 // Touch/mobile detection
 const IS_TOUCH = (('ontouchstart' in window) || (navigator.maxTouchPoints>0) || (window.matchMedia && matchMedia('(pointer: coarse)').matches));
@@ -635,6 +648,8 @@ const tileIndex = {
   wood: 7,
   leaf: 8,
   lamp: 9,
+  chest: 10,
+  ore: 11,
 };
 
 function drawTile(ctx, idx, color, borderColor){
@@ -675,6 +690,8 @@ drawTile(actx, tileIndex.wood, '#9b6b3d', '#5a3a1c');
 // Make leaves noticeably darker than grass for clear contrast
 drawTile(actx, tileIndex.leaf, '#2a5e1f', '#0e2a09');
 drawTile(actx, tileIndex.lamp, '#f2e48a', '#a07f2a');
+drawTile(actx, tileIndex.chest, '#b87832', '#5b3314');
+drawTile(actx, tileIndex.ore, '#7e8f96', '#2f464f');
 
 // Upload as GL texture
 const tex = gl.createTexture();
@@ -1087,6 +1104,20 @@ function allocSceneTarget(w, h){
 const WORLD_W = 64;
 const WORLD_H = 32;
 const WORLD_D = 64;
+const BLOCK_ID = {
+  AIR: 0,
+  GRASS: 1,
+  DIRT: 3,
+  STONE: 4,
+  WATER: 5,
+  SAND: 6,
+  ROCK: 7,
+  WOOD: 8,
+  LEAF: 9,
+  LAMP: 10,
+  CHEST: 11,
+  ORE: 12,
+};
 
 const blocks = new Uint8Array(WORLD_W * WORLD_H * WORLD_D); // 0=air, >0 block ids
 
@@ -1095,6 +1126,9 @@ const STORAGE_KEY = 'voxel_world_v1';
 const PLAYER_KEY = 'voxel_player_v1';
 const TIME_KEY = 'voxel_time_phase_v1'; // stores phase in [0,1)
 const SETTINGS_KEY = 'voxel_settings_v1';
+const INVENTORY_KEY = 'voxel_inventory_v1';
+const OBJECTIVE_KEY = 'voxel_objectives_v1';
+const CHEST_KEY = 'voxel_chests_v1';
 
 function bytesToBase64(bytes){
   let binary = '';
@@ -1204,8 +1238,48 @@ function rleDecompress(u8, outLen){
   return out;
 }
 
-// Build deterministic base world (same as initial generation)
-function buildBaseWorldArray(){
+function hash2i(x,z){
+  let n = (x * 374761393 + z * 668265263) | 0;
+  n = (n ^ (n >>> 13)) | 0;
+  n = Math.imul(n, 1274126177);
+  return ((n ^ (n >>> 16)) >>> 0) / 4294967296;
+}
+
+function hash3i(x,y,z){
+  let n = (x * 73856093) ^ (y * 19349663) ^ (z * 83492791);
+  n = Math.imul(n ^ (n >>> 13), 1274126177);
+  return ((n ^ (n >>> 16)) >>> 0) / 4294967296;
+}
+
+function placeBaseTree(arr, x, y, z){
+  const h = 4 + ((hash2i(x+11,z-7) * 3)|0);
+  for (let i=0; i<h && y+i<WORLD_H; i++){
+    arr[idx(x,y+i,z)] = BLOCK_ID.WOOD;
+  }
+  const topY = y + h - 1;
+  for (let dy=-2; dy<=1; dy++){
+    const ly = topY + dy;
+    if (ly < y+2 || ly >= WORLD_H) continue;
+    const radius = dy === 1 ? 1 : dy === -2 ? 1 : 2;
+    for (let dz=-radius; dz<=radius; dz++){
+      for (let dx=-radius; dx<=radius; dx++){
+        if ((dx*dx + dz*dz) > radius*radius + 0.35) continue;
+        if (dx===0 && dz===0 && dy<=0) continue;
+        const lx = x+dx, lz = z+dz;
+        if (lx<1 || lz<1 || lx>=WORLD_W-1 || lz>=WORLD_D-1) continue;
+        if (arr[idx(lx,ly,lz)] === BLOCK_ID.AIR) arr[idx(lx,ly,lz)] = BLOCK_ID.LEAF;
+      }
+    }
+  }
+}
+
+function shouldPlaceBaseTree(x,z,h){
+  if (x < 4 || z < 4 || x > WORLD_W-5 || z > WORLD_D-5 || h <= WATER_LEVEL+1) return false;
+  if (((x * 3 + z * 5) % 7) !== 0) return false;
+  return hash2i(x,z) < 0.16;
+}
+
+function fillTerrainBaseArray({ resources=false, trees=false } = {}){
   const arr = new Uint8Array(blocks.length);
   for(let z=0; z<WORLD_D; z++){
     for(let x=0; x<WORLD_W; x++){
@@ -1213,19 +1287,67 @@ function buildBaseWorldArray(){
       for(let y=0; y<=h; y++){
         const isTop = y===h;
         let id = 0;
-        if (isTop) id = 1; // grass
-        else if (y >= h-2) id = 3; // dirt
-        else id = 4; // stone
+        if (isTop) id = BLOCK_ID.GRASS;
+        else if (y >= h-2) id = BLOCK_ID.DIRT;
+        else {
+          id = BLOCK_ID.STONE;
+          if (resources && y >= h-6 && y <= h-2 && hash3i(x,y,z) < 0.055) id = BLOCK_ID.ROCK;
+          else if (resources && y <= Math.max(3, h-8) && hash3i(x+17,y,z-23) < 0.035) id = BLOCK_ID.ORE;
+        }
         arr[idx(x,y,z)] = id;
       }
       if (h < WATER_LEVEL){
         for(let y=h+1; y<=WATER_LEVEL; y++){
-          arr[idx(x,y,z)] = 5; // water
+          arr[idx(x,y,z)] = BLOCK_ID.WATER;
         }
       }
     }
   }
+  if (trees){
+    for(let z=0; z<WORLD_D; z++){
+      for(let x=0; x<WORLD_W; x++){
+        const h = heightAt(x,z);
+        if (shouldPlaceBaseTree(x,z,h)) placeBaseTree(arr, x, h+1, z);
+      }
+    }
+  }
   return arr;
+}
+
+function buildLegacyBaseWorldArray(){
+  return fillTerrainBaseArray({ resources: false, trees: false });
+}
+
+// Build deterministic base world including Survival Builder resources.
+function buildBaseWorldArray(){
+  return fillTerrainBaseArray({ resources: true, trees: true });
+}
+
+function migrateSurvivalResourcesIntoWorld(){
+  const legacy = buildLegacyBaseWorldArray();
+  const upgraded = buildBaseWorldArray();
+  for (let i=0; i<blocks.length; i++){
+    if (legacy[i] !== BLOCK_ID.AIR && blocks[i] === legacy[i] && upgraded[i] !== legacy[i]) {
+      blocks[i] = upgraded[i];
+    }
+  }
+  migrateLegacyWoodSourcesIntoWorld(legacy);
+}
+
+function migrateLegacyWoodSourcesIntoWorld(legacy){
+  for(let z=0; z<WORLD_D; z++){
+    for(let x=0; x<WORLD_W; x++){
+      const h = heightAt(x,z);
+      if (!shouldPlaceBaseTree(x,z,h)) continue;
+      const ground = idx(x,h,z);
+      if (h+1 >= WORLD_H) continue;
+      const above = idx(x,h+1,z);
+      if (blocks[ground] !== legacy[ground]) continue;
+      if (legacy[ground] !== BLOCK_ID.GRASS) continue;
+      if (blocks[above] !== legacy[above] || legacy[above] !== BLOCK_ID.AIR) continue;
+      blocks[ground] = BLOCK_ID.WOOD;
+    }
+  }
 }
 
 function encodeDeltaFromBase(){
@@ -1249,8 +1371,7 @@ function encodeDeltaFromBase(){
   return new Uint8Array(out);
 }
 
-function decodeDeltaIntoWorld(body){
-  const base = buildBaseWorldArray();
+function decodeDeltaIntoWorld(body, base=buildBaseWorldArray()){
   blocks.set(base);
   // read count
   let i = 0; const r = readVarint(body, i); let count = r.value; i = r.next;
@@ -1266,17 +1387,17 @@ function decodeDeltaIntoWorld(body){
 // Encode world blocks → compact url-safe string
 function encodeWorldToCode(){
   // Option A: full RLE
-  const headerV2 = new Uint8Array([86,87,50, WORLD_W, WORLD_H, WORLD_D]); // 'V''W''2' + dims
+  const headerV3 = new Uint8Array([86,87,51, WORLD_W, WORLD_H, WORLD_D]); // 'V''W''3' + dims
   const fullBody = rleCompress(blocks);
-  const full = new Uint8Array(headerV2.length + 1 + fullBody.length);
-  full.set(headerV2, 0); full[headerV2.length] = 0; // mode=0 full
-  full.set(fullBody, headerV2.length+1);
+  const full = new Uint8Array(headerV3.length + 1 + fullBody.length);
+  full.set(headerV3, 0); full[headerV3.length] = 0; // mode=0 full
+  full.set(fullBody, headerV3.length+1);
 
   // Option B: delta from base world
   const deltaBytes = encodeDeltaFromBase();
-  const delta = new Uint8Array(headerV2.length + 1 + deltaBytes.length);
-  delta.set(headerV2, 0); delta[headerV2.length] = 1; // mode=1 delta
-  delta.set(deltaBytes, headerV2.length+1);
+  const delta = new Uint8Array(headerV3.length + 1 + deltaBytes.length);
+  delta.set(headerV3, 0); delta[headerV3.length] = 1; // mode=1 delta
+  delta.set(deltaBytes, headerV3.length+1);
 
   const a = b64urlEncode(full);
   const b = b64urlEncode(delta);
@@ -1294,7 +1415,7 @@ function decodeWorldFromCode(code){
     const decompressed = rleDecompress(body, blocks.length);
     if (decompressed.length !== blocks.length) throw new Error('Decompress mismatch');
     blocks.set(decompressed);
-  } else if (ver === 50) { // '2'
+  } else if (ver === 50 || ver === 51) { // '2' or '3'
     const mode = data[6];
     const body = data.subarray(7);
     if (mode === 0){
@@ -1302,13 +1423,15 @@ function decodeWorldFromCode(code){
       if (decompressed.length !== blocks.length) throw new Error('Decompress mismatch');
       blocks.set(decompressed);
     } else if (mode === 1){
-      decodeDeltaIntoWorld(body);
+      const base = ver === 50 ? buildLegacyBaseWorldArray() : buildBaseWorldArray();
+      decodeDeltaIntoWorld(body, base);
     } else {
       throw new Error('Unknown mode');
     }
   } else {
     throw new Error('Unknown version');
   }
+  if (ver < 51) migrateSurvivalResourcesIntoWorld();
   worldDirty = true;
 }
 
@@ -1335,7 +1458,9 @@ function promptLoadWorldCode(){
   if (!str) return;
   try {
     decodeWorldFromCode(str.trim());
+    resetChestsForCurrentWorld();
     saveWorld();
+    saveChests();
     // Ensure player isn't trapped in blocks after load
     ensurePlayerNotStuck();
     alert('World loaded!');
@@ -1349,6 +1474,7 @@ function saveWorld(){
   try {
     const payload = {
       w: WORLD_W, h: WORLD_H, d: WORLD_D,
+      survivalBuilderVersion: 1,
       data: bytesToBase64(blocks)
     };
     localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
@@ -1365,6 +1491,10 @@ function loadWorld(){
     const arr = base64ToBytes(obj.data);
     if (arr.length !== blocks.length) return false;
     blocks.set(arr);
+    if ((obj.survivalBuilderVersion|0) < 1) {
+      migrateSurvivalResourcesIntoWorld();
+      saveWorld();
+    }
     return true;
   } catch (e) {
     console.warn('Failed loading world:', e);
@@ -1395,11 +1525,11 @@ function scheduleSave(){
   if (saveTimer) clearTimeout(saveTimer);
   saveTimer = setTimeout(saveWorld, 1000);
 }
-window.addEventListener('beforeunload', ()=>{ saveWorld(); savePlayer(); saveTimePhase(); });
+window.addEventListener('beforeunload', ()=>{ saveWorld(); savePlayer(); saveTimePhase(); saveInventory(); saveObjectiveProgress(); saveChests(); });
 document.addEventListener('visibilitychange', ()=>{
   if (document.visibilityState === 'hidden'){
     // Persist state
-    saveWorld(); savePlayer(); saveTimePhase();
+    saveWorld(); savePlayer(); saveTimePhase(); saveInventory(); saveObjectiveProgress(); saveChests();
     // Pause all audio scheduling to avoid throttled/uneven timers
     stopMusic();
     stopLabPreview();
@@ -1465,25 +1595,7 @@ const WATER_LEVEL = 8;
 
 // Try to load world; otherwise generate and then save
 if (!loadWorld()){
-  for(let z=0; z<WORLD_D; z++){
-    for(let x=0; x<WORLD_W; x++){
-      const h = heightAt(x,z);
-      for(let y=0; y<=h; y++){
-        const isTop = y===h;
-        let id = 0;
-        if (isTop) id = 1; // grass
-        else if (y >= h-2) id = 3; // dirt
-        else id = 4; // stone
-        blocks[idx(x,y,z)] = id;
-      }
-      // water fill to water level if terrain below
-      if (h < WATER_LEVEL){
-        for(let y=h+1; y<=WATER_LEVEL; y++){
-          blocks[idx(x,y,z)] = 5; // water (opaque here)
-        }
-      }
-    }
-  }
+  blocks.set(buildBaseWorldArray());
   // initial save
   saveWorld();
 }
@@ -1491,16 +1603,7 @@ if (!loadWorld()){
 // Block type -> tile per face
 // ids: 0=air,1=grass,3=dirt,4=stone,5=water,6=sand,7=rock, 8=wood, 9=leaf, 10=lamp
 const BLOCK = {
-  AIR: 0,
-  GRASS: 1,
-  DIRT: 3,
-  STONE: 4,
-  WATER: 5,
-  SAND: 6,
-  ROCK: 7,
-  WOOD: 8,
-  LEAF: 9,
-  LAMP: 10,
+  ...BLOCK_ID,
 };
 
 const BLOCK_TILES = {
@@ -1513,6 +1616,8 @@ const BLOCK_TILES = {
   [BLOCK.WOOD]:  { top: tileIndex.wood, side: tileIndex.wood, bottom: tileIndex.wood },
   [BLOCK.LEAF]:  { top: tileIndex.leaf, side: tileIndex.leaf, bottom: tileIndex.leaf },
   [BLOCK.LAMP]:  { top: tileIndex.lamp, side: tileIndex.lamp, bottom: tileIndex.lamp },
+  [BLOCK.CHEST]: { top: tileIndex.chest, side: tileIndex.chest, bottom: tileIndex.wood },
+  [BLOCK.ORE]:   { top: tileIndex.ore, side: tileIndex.ore, bottom: tileIndex.ore },
 };
 
 // Representative colors for block outline/UI accents (match drawTile base colors)
@@ -1526,7 +1631,181 @@ const BLOCK_COLOR = {
   [BLOCK.WOOD]:  '#9b6b3d',
   [BLOCK.LEAF]:  '#2a5e1f',
   [BLOCK.LAMP]:  '#f2e48a',
+  [BLOCK.CHEST]: '#b87832',
+  [BLOCK.ORE]:   '#7e8f96',
 };
+
+const MAX_STACK = 99;
+function blockItemId(blockId){ return `block:${blockId}`; }
+
+const ITEM_DEFS = {
+  [blockItemId(BLOCK.GRASS)]: { name: 'Grass', color: BLOCK_COLOR[BLOCK.GRASS], block: BLOCK.GRASS },
+  [blockItemId(BLOCK.DIRT)]: { name: 'Dirt', color: BLOCK_COLOR[BLOCK.DIRT], block: BLOCK.DIRT },
+  [blockItemId(BLOCK.STONE)]: { name: 'Stone', color: BLOCK_COLOR[BLOCK.STONE], block: BLOCK.STONE },
+  [blockItemId(BLOCK.WATER)]: { name: 'Water', color: BLOCK_COLOR[BLOCK.WATER], block: BLOCK.WATER },
+  [blockItemId(BLOCK.SAND)]: { name: 'Sand', color: BLOCK_COLOR[BLOCK.SAND], block: BLOCK.SAND },
+  [blockItemId(BLOCK.ROCK)]: { name: 'Rock', color: BLOCK_COLOR[BLOCK.ROCK], block: BLOCK.ROCK },
+  [blockItemId(BLOCK.WOOD)]: { name: 'Wood', color: BLOCK_COLOR[BLOCK.WOOD], block: BLOCK.WOOD },
+  [blockItemId(BLOCK.LEAF)]: { name: 'Leaf', color: BLOCK_COLOR[BLOCK.LEAF], block: BLOCK.LEAF },
+  [blockItemId(BLOCK.LAMP)]: { name: 'Lamp', color: BLOCK_COLOR[BLOCK.LAMP], block: BLOCK.LAMP },
+  [blockItemId(BLOCK.CHEST)]: { name: 'Chest', color: BLOCK_COLOR[BLOCK.CHEST], block: BLOCK.CHEST },
+  [blockItemId(BLOCK.ORE)]: { name: 'Ore', color: BLOCK_COLOR[BLOCK.ORE], block: BLOCK.ORE },
+  plank: { name: 'Planks', color: '#c9964a' },
+  stick: { name: 'Sticks', color: '#b77a38' },
+  wood_pickaxe: { name: 'Wooden Pickaxe', color: '#c9964a', toolTier: 1 },
+  stone_pickaxe: { name: 'Stone Pickaxe', color: '#a8b2bd', toolTier: 2 },
+  pickaxe: { name: 'Basic Pickaxe', color: '#a8b2bd', toolTier: 2 },
+};
+
+const HARVEST_RULES = {
+  [BLOCK.GRASS]: { item: blockItemId(BLOCK.GRASS), amount: 1, hardness: 1, toolTier: 0 },
+  [BLOCK.DIRT]:  { item: blockItemId(BLOCK.DIRT), amount: 1, hardness: 1, toolTier: 0 },
+  [BLOCK.STONE]: { item: blockItemId(BLOCK.STONE), amount: 1, hardness: 4, toolTier: 1 },
+  [BLOCK.WATER]: { item: blockItemId(BLOCK.WATER), amount: 1, hardness: 1, toolTier: 0 },
+  [BLOCK.SAND]:  { item: blockItemId(BLOCK.SAND), amount: 1, hardness: 1, toolTier: 0 },
+  [BLOCK.ROCK]:  { item: blockItemId(BLOCK.ROCK), amount: 1, hardness: 5, toolTier: 2 },
+  [BLOCK.WOOD]:  { item: blockItemId(BLOCK.WOOD), amount: 1, hardness: 2, toolTier: 0 },
+  [BLOCK.LEAF]:  { item: blockItemId(BLOCK.LEAF), amount: 1, hardness: 1, toolTier: 0 },
+  [BLOCK.LAMP]:  { item: blockItemId(BLOCK.LAMP), amount: 1, hardness: 2, toolTier: 0 },
+  [BLOCK.CHEST]: { item: blockItemId(BLOCK.CHEST), amount: 1, hardness: 2, toolTier: 0 },
+  [BLOCK.ORE]:   { item: blockItemId(BLOCK.ORE), amount: 1, hardness: 6, toolTier: 2 },
+};
+
+const CRAFT_RECIPES = [
+  {
+    id: 'planks',
+    name: 'Wood -> Planks',
+    in: { [blockItemId(BLOCK.WOOD)]: 1 },
+    out: { plank: 4 },
+  },
+  {
+    id: 'sticks',
+    name: 'Planks -> Sticks',
+    in: { plank: 2 },
+    out: { stick: 4 },
+  },
+  {
+    id: 'wood-pickaxe',
+    name: 'Wooden Pickaxe',
+    in: { plank: 3, stick: 2 },
+    out: { wood_pickaxe: 1 },
+  },
+  {
+    id: 'stone-pickaxe',
+    name: 'Stone Pickaxe',
+    in: { [blockItemId(BLOCK.STONE)]: 3, stick: 2 },
+    out: { stone_pickaxe: 1 },
+  },
+  {
+    id: 'wood-block',
+    name: 'Planks -> Wood',
+    in: { plank: 4 },
+    out: { [blockItemId(BLOCK.WOOD)]: 1 },
+  },
+  {
+    id: 'lamp',
+    name: 'Lamp Block',
+    in: { [blockItemId(BLOCK.ROCK)]: 1, stick: 1 },
+    out: { [blockItemId(BLOCK.LAMP)]: 1 },
+  },
+  {
+    id: 'ore-lamp',
+    name: 'Ore Lamp Block',
+    in: { [blockItemId(BLOCK.ORE)]: 1, stick: 1 },
+    out: { [blockItemId(BLOCK.LAMP)]: 1 },
+  },
+  {
+    id: 'chest',
+    name: 'Chest',
+    in: { plank: 6 },
+    out: { [blockItemId(BLOCK.CHEST)]: 1 },
+  },
+];
+
+const OBJECTIVES = [
+  {
+    id: 'harvest-wood',
+    title: 'Collect Wood',
+    detail: 'Get 1 Wood in your inventory.',
+    item: blockItemId(BLOCK.WOOD),
+    count: 1,
+  },
+  {
+    id: 'craft-planks',
+    title: 'Craft Planks',
+    detail: 'Open inventory with I and craft Wood into Planks.',
+    item: 'plank',
+    count: 4,
+  },
+  {
+    id: 'craft-sticks',
+    title: 'Craft Sticks',
+    detail: 'Craft Planks into Sticks for tool handles.',
+    item: 'stick',
+    count: 4,
+  },
+  {
+    id: 'craft-wood-pickaxe',
+    title: 'Craft A Wooden Pickaxe',
+    detail: 'Craft a Wooden Pickaxe from Planks and Sticks.',
+    item: 'wood_pickaxe',
+    count: 1,
+  },
+  {
+    id: 'harvest-stone',
+    title: 'Harvest Stone',
+    detail: 'Select the Wooden Pickaxe and break stone blocks until you have 3 Stone.',
+    item: blockItemId(BLOCK.STONE),
+    count: 3,
+  },
+  {
+    id: 'craft-stone-pickaxe',
+    title: 'Craft A Stone Pickaxe',
+    detail: 'Craft a Stone Pickaxe from Stone and Sticks.',
+    item: 'stone_pickaxe',
+    count: 1,
+  },
+  {
+    id: 'harvest-rock',
+    title: 'Harvest Rock Or Ore',
+    detail: 'Select the Stone Pickaxe and collect 1 Rock or Ore.',
+    check: ()=> getItemCount(blockItemId(BLOCK.ROCK)) + getItemCount(blockItemId(BLOCK.ORE)) >= 1,
+    current: ()=> getItemCount(blockItemId(BLOCK.ROCK)) + getItemCount(blockItemId(BLOCK.ORE)),
+    count: 1,
+  },
+  {
+    id: 'craft-lamp',
+    title: 'Craft A Lamp',
+    detail: 'Craft a Lamp Block from Rock or Ore and a Stick.',
+    item: blockItemId(BLOCK.LAMP),
+    count: 1,
+  },
+  {
+    id: 'craft-chest',
+    title: 'Craft A Chest',
+    detail: 'Craft a Chest from Planks.',
+    item: blockItemId(BLOCK.CHEST),
+    count: 1,
+  },
+  {
+    id: 'place-chest',
+    title: 'Place The Chest',
+    detail: 'Select the Chest hotbar slot and place it as your base anchor.',
+    check: ()=> chestExists(),
+  },
+  {
+    id: 'place-lamp-near-chest',
+    title: 'Light The Chest',
+    detail: 'Place a Lamp within five blocks of a Chest.',
+    check: ()=> lampNearChestExists(),
+  },
+  {
+    id: 'build-shelter',
+    title: 'Build A Simple Shelter',
+    detail: 'Add floor, wall, and roof blocks around a Chest.',
+    check: ()=> shelterExists(),
+  },
+];
 
 function inBounds(x,y,z){
   return x>=0 && z>=0 && y>=0 && x<WORLD_W && z<WORLD_D && y<WORLD_H;
@@ -1540,6 +1819,75 @@ function setBlock(x,y,z,id){
   blocks[idx(x,y,z)] = id;
   worldDirty = true;
   scheduleSave();
+}
+
+function parsePosKey(key){
+  const parts = String(key).split(',').map((part)=> parseInt(part, 10));
+  if (parts.length !== 3 || parts.some((v)=> !Number.isFinite(v))) return null;
+  return { x: parts[0], y: parts[1], z: parts[2] };
+}
+
+function isShelterBlock(id){
+  return id !== BLOCK.AIR && id !== BLOCK.WATER && id !== BLOCK.LEAF;
+}
+
+function collectChestPositions(){
+  const out = [];
+  for (let y=0; y<WORLD_H; y++){
+    for (let z=0; z<WORLD_D; z++){
+      for (let x=0; x<WORLD_W; x++){
+        if (getBlock(x,y,z) === BLOCK.CHEST) out.push({ x, y, z });
+      }
+    }
+  }
+  return out;
+}
+
+function chestExists(){
+  return collectChestPositions().length > 0;
+}
+
+function lampNearChestExists(){
+  const chestsFound = collectChestPositions();
+  for (const chest of chestsFound){
+    for (let y=Math.max(0, chest.y-3); y<=Math.min(WORLD_H-1, chest.y+4); y++){
+      for (let z=Math.max(0, chest.z-5); z<=Math.min(WORLD_D-1, chest.z+5); z++){
+        for (let x=Math.max(0, chest.x-5); x<=Math.min(WORLD_W-1, chest.x+5); x++){
+          if (getBlock(x,y,z) !== BLOCK.LAMP) continue;
+          const dist = Math.hypot(x-chest.x, y-chest.y, z-chest.z);
+          if (dist <= 5.0) return true;
+        }
+      }
+    }
+  }
+  return false;
+}
+
+function shelterExists(){
+  const chestsFound = collectChestPositions();
+  for (const chest of chestsFound){
+    let floor = 0, walls = 0, roof = 0;
+    for (let dz=-2; dz<=2; dz++){
+      for (let dx=-2; dx<=2; dx++){
+        if (isShelterBlock(getBlock(chest.x+dx, chest.y-1, chest.z+dz))) floor += 1;
+        if (isShelterBlock(getBlock(chest.x+dx, chest.y+3, chest.z+dz))) roof += 1;
+      }
+    }
+    for (let dy=0; dy<=2; dy++){
+      for (let i=-2; i<=2; i++){
+        if (isShelterBlock(getBlock(chest.x-2, chest.y+dy, chest.z+i))) walls += 1;
+        if (isShelterBlock(getBlock(chest.x+2, chest.y+dy, chest.z+i))) walls += 1;
+        if (isShelterBlock(getBlock(chest.x+i, chest.y+dy, chest.z-2))) walls += 1;
+        if (isShelterBlock(getBlock(chest.x+i, chest.y+dy, chest.z+2))) walls += 1;
+      }
+    }
+    if (floor >= 9 && walls >= 12 && roof >= 4) return true;
+  }
+  return false;
+}
+
+function updateShelterProgress(){
+  updateObjectiveProgress();
 }
 
 // World mesh generation (cull faces hidden by neighbors)
@@ -1714,6 +2062,20 @@ window.addEventListener('keydown', (e)=>{
     debugVisible = !debugVisible;
     if (debugEl) debugEl.classList.toggle('hidden', !debugVisible);
   }
+  if (e.code==='KeyI') {
+    e.preventDefault();
+    if (labEl && !labEl.classList.contains('hidden')) return;
+    toggleInventoryPanel();
+    return;
+  }
+  if (e.code==='KeyX') {
+    e.preventDefault();
+    if (labEl && !labEl.classList.contains('hidden')) return;
+    if (isChestOpen()) toggleChestPanel(false);
+    else useTargetOnce();
+    return;
+  }
+  if (isInventoryOpen() || isChestOpen()) return;
   // If music lab is open, only allow 'G' to close it; ignore other game controls
   if (labEl && !labEl.classList.contains('hidden') && e.code !== 'KeyG') return;
   keys.add(e.code);
@@ -1791,6 +2153,7 @@ window.addEventListener('keydown', (e)=>{
   // Removed track 7
 });
 window.addEventListener('keyup', (e)=>{
+  if (isInventoryOpen() || isChestOpen()) return;
   if (labEl && !labEl.classList.contains('hidden')) return;
   keys.delete(e.code);
   if (e.code==='ShiftLeft' || e.code==='ShiftRight') sprint = false;
@@ -1801,7 +2164,7 @@ canvas.addEventListener('click', ()=>{
   resumeAudio();
   updateMusicLabel();
   // Do not lock pointer if music lab is open
-  if (!labEl || labEl.classList.contains('hidden')) {
+  if ((!labEl || labEl.classList.contains('hidden')) && !isInventoryOpen() && !isChestOpen()) {
     canvas.requestPointerLock();
   }
 });
@@ -1834,6 +2197,7 @@ let touchMoveAccum = 0;
 
 function onTouchStart(ev){
   if (!IS_TOUCH) return;
+  if (isInventoryOpen() || isChestOpen()) return;
   if (labEl && !labEl.classList.contains('hidden')) return;
   const t = ev.touches[0]; if (!t) return;
   ev.preventDefault();
@@ -1877,36 +2241,597 @@ canvas.addEventListener('touchcancel', onTouchEnd, { passive:false });
 
 // Block selection and actions
 const placeOptions = [
-  { type:'block', id: BLOCK.GRASS, name:'Grass' },
-  { type:'block', id: BLOCK.DIRT,  name:'Dirt' },
-  { type:'block', id: BLOCK.STONE, name:'Stone' },
-  { type:'block', id: BLOCK.SAND,  name:'Sand' },
-  { type:'block', id: BLOCK.ROCK,  name:'Rock' },
-  { type:'block', id: BLOCK.WATER, name:'Water' },
-  { type:'block', id: BLOCK.WOOD,  name:'Wood' },
-  { type:'block', id: BLOCK.LEAF,  name:'Leaf' },
-  { type:'block', id: BLOCK.LAMP,  name:'Lamp' },
-  { type:'tree',               name:'Tree' },
+  { type:'block', id: BLOCK.GRASS, item: blockItemId(BLOCK.GRASS), name:'Grass' },
+  { type:'block', id: BLOCK.DIRT,  item: blockItemId(BLOCK.DIRT),  name:'Dirt' },
+  { type:'block', id: BLOCK.STONE, item: blockItemId(BLOCK.STONE), name:'Stone' },
+  { type:'block', id: BLOCK.SAND,  item: blockItemId(BLOCK.SAND),  name:'Sand' },
+  { type:'block', id: BLOCK.ROCK,  item: blockItemId(BLOCK.ROCK),  name:'Rock' },
+  { type:'block', id: BLOCK.WATER, item: blockItemId(BLOCK.WATER), name:'Water' },
+  { type:'block', id: BLOCK.WOOD,  item: blockItemId(BLOCK.WOOD),  name:'Wood' },
+  { type:'block', id: BLOCK.LEAF,  item: blockItemId(BLOCK.LEAF),  name:'Leaf' },
+  { type:'block', id: BLOCK.LAMP,  item: blockItemId(BLOCK.LAMP),  name:'Lamp' },
+  { type:'block', id: BLOCK.CHEST, item: blockItemId(BLOCK.CHEST), name:'Chest' },
+  { type:'tool', item: 'wood_pickaxe', name:'Wood Pick' },
+  { type:'tool', item: 'stone_pickaxe', name:'Stone Pick' },
 ];
 let selectedIndex = 0;
+let inventory = {};
+let objectiveProgress = { index: 0, completed: [], flags: {} };
+let chests = {};
+let openChestKey = null;
+let harvestTarget = null;
+let harvestStatusTimer = null;
+
+function itemName(itemId){
+  return (ITEM_DEFS[itemId] && ITEM_DEFS[itemId].name) || itemId;
+}
+
+function getItemCount(itemId){
+  return Math.max(0, inventory[itemId]|0);
+}
+
+function setItemCount(itemId, count){
+  const next = Math.max(0, Math.min(MAX_STACK, count|0));
+  if (next > 0) inventory[itemId] = next;
+  else delete inventory[itemId];
+}
+
+function canAddItem(itemId, amount=1){
+  return !!ITEM_DEFS[itemId] && amount > 0 && getItemCount(itemId) + amount <= MAX_STACK;
+}
+
+function addItem(itemId, amount=1, persist=true){
+  if (!ITEM_DEFS[itemId] || amount <= 0) return false;
+  if (!canAddItem(itemId, amount)) return false;
+  setItemCount(itemId, getItemCount(itemId) + amount);
+  if (persist) {
+    saveInventory();
+    refreshInventoryUI();
+  }
+  return true;
+}
+
+function removeItem(itemId, amount=1, persist=true){
+  if (getItemCount(itemId) < amount) return false;
+  setItemCount(itemId, getItemCount(itemId) - amount);
+  if (persist) {
+    saveInventory();
+    refreshInventoryUI();
+  }
+  return true;
+}
+
+function hasIngredients(ingredients){
+  for (const itemId of Object.keys(ingredients)){
+    if (getItemCount(itemId) < ingredients[itemId]) return false;
+  }
+  return true;
+}
+
+function canFitOutputs(outputs){
+  for (const itemId of Object.keys(outputs)){
+    if (!canAddItem(itemId, outputs[itemId])) return false;
+  }
+  return true;
+}
+
+function consumeIngredients(ingredients){
+  if (!hasIngredients(ingredients)) return false;
+  for (const itemId of Object.keys(ingredients)){
+    setItemCount(itemId, getItemCount(itemId) - ingredients[itemId]);
+  }
+  return true;
+}
+
+function saveInventory(){
+  try {
+    localStorage.setItem(INVENTORY_KEY, JSON.stringify({ version: 1, items: inventory }));
+  } catch (e) {
+    console.warn('Failed saving inventory:', e);
+  }
+}
+
+function loadInventory(){
+  try {
+    const s = localStorage.getItem(INVENTORY_KEY);
+    if (s) {
+      const obj = JSON.parse(s);
+      const items = obj && obj.items;
+      if (items && typeof items === 'object') {
+        inventory = {};
+        for (const itemId of Object.keys(items)){
+          if (ITEM_DEFS[itemId]) setItemCount(itemId, items[itemId]|0);
+        }
+        return true;
+      }
+    }
+  } catch (e) {
+    console.warn('Failed loading inventory:', e);
+  }
+  inventory = {};
+  addItem(blockItemId(BLOCK.DIRT), 12, false);
+  addItem('stick', 2, false);
+  saveInventory();
+  return false;
+}
+
+function chestKey(x,y,z){ return `${x},${y},${z}`; }
+
+function saveChests(){
+  try {
+    localStorage.setItem(CHEST_KEY, JSON.stringify({ version: 1, chests }));
+  } catch (e) {
+    console.warn('Failed saving chests:', e);
+  }
+}
+
+function loadChests(){
+  try {
+    const s = localStorage.getItem(CHEST_KEY);
+    if (!s) return false;
+    const obj = JSON.parse(s);
+    const data = obj && obj.chests;
+    if (!data || typeof data !== 'object') return false;
+    chests = {};
+    for (const key of Object.keys(data)){
+      const source = data[key];
+      const items = source && typeof source === 'object' && source.items ? source.items : source;
+      if (!items || typeof items !== 'object') continue;
+      const clean = {};
+      for (const itemId of Object.keys(items)){
+        if (ITEM_DEFS[itemId]) {
+          const count = Math.max(0, Math.min(MAX_STACK, items[itemId]|0));
+          if (count > 0) clean[itemId] = count;
+        }
+      }
+      chests[key] = clean;
+    }
+    return true;
+  } catch (e) {
+    console.warn('Failed loading chests:', e);
+    return false;
+  }
+}
+
+function getChestItems(key){
+  if (!chests[key]) chests[key] = {};
+  return chests[key];
+}
+
+function chestItemCount(key, itemId){
+  const items = getChestItems(key);
+  return Math.max(0, items[itemId]|0);
+}
+
+function setChestItemCount(key, itemId, count){
+  const items = getChestItems(key);
+  const next = Math.max(0, Math.min(MAX_STACK, count|0));
+  if (next > 0) items[itemId] = next;
+  else delete items[itemId];
+}
+
+function chestIsEmpty(key){
+  const items = chests[key];
+  return !items || Object.keys(items).every((itemId)=> (items[itemId]|0) <= 0);
+}
+
+function createChestAt(x,y,z){
+  const key = chestKey(x,y,z);
+  if (!chests[key]) chests[key] = {};
+  saveChests();
+  return key;
+}
+
+function deleteChestAt(x,y,z){
+  delete chests[chestKey(x,y,z)];
+  saveChests();
+}
+
+function resetChestsForCurrentWorld(){
+  const next = {};
+  for (const chest of collectChestPositions()){
+    next[chestKey(chest.x, chest.y, chest.z)] = {};
+  }
+  chests = next;
+}
+
+function saveObjectiveProgress(){
+  try {
+    localStorage.setItem(OBJECTIVE_KEY, JSON.stringify({
+      version: 1,
+      index: objectiveProgress.index|0,
+      completed: objectiveProgress.completed || [],
+      flags: objectiveProgress.flags || {},
+    }));
+  } catch (e) {
+    console.warn('Failed saving objectives:', e);
+  }
+}
+
+function loadObjectiveProgress(){
+  try {
+    const s = localStorage.getItem(OBJECTIVE_KEY);
+    if (!s) return false;
+    const obj = JSON.parse(s);
+    if (!obj || typeof obj !== 'object') return false;
+    objectiveProgress = {
+      index: Math.max(0, Math.min(OBJECTIVES.length, obj.index|0)),
+      completed: Array.isArray(obj.completed) ? obj.completed.filter((id)=> typeof id === 'string') : [],
+      flags: (obj.flags && typeof obj.flags === 'object') ? obj.flags : {},
+    };
+    return true;
+  } catch (e) {
+    console.warn('Failed loading objectives:', e);
+    return false;
+  }
+}
+
+function getObjectiveState(obj){
+  if (!obj) return { done: true, current: 1, target: 1 };
+  if (obj.check) {
+    const done = !!obj.check();
+    const current = obj.current ? obj.current() : (done ? 1 : 0);
+    return { done, current, target: obj.count || 1 };
+  }
+  if (obj.item) {
+    const current = getItemCount(obj.item);
+    return { done: current >= obj.count, current, target: obj.count };
+  }
+  if (obj.flag) {
+    const done = !!(objectiveProgress.flags && objectiveProgress.flags[obj.flag]);
+    return { done, current: done ? 1 : 0, target: 1 };
+  }
+  return { done: false, current: 0, target: 1 };
+}
+
+function updateObjectiveProgress(){
+  let advanced = false;
+  while (objectiveProgress.index < OBJECTIVES.length) {
+    const obj = OBJECTIVES[objectiveProgress.index];
+    if (!getObjectiveState(obj).done) break;
+    if (!objectiveProgress.completed) objectiveProgress.completed = [];
+    if (!objectiveProgress.completed.includes(obj.id)) objectiveProgress.completed.push(obj.id);
+    showHarvestStatus(`Objective complete: ${obj.title}`, 1600);
+    objectiveProgress.index += 1;
+    advanced = true;
+  }
+  if (advanced) saveObjectiveProgress();
+  renderObjective();
+}
+
+function markObjectiveFlag(flag){
+  if (!objectiveProgress.flags) objectiveProgress.flags = {};
+  if (!objectiveProgress.flags[flag]) {
+    objectiveProgress.flags[flag] = true;
+    saveObjectiveProgress();
+  }
+  updateObjectiveProgress();
+}
+
+function renderObjective(){
+  if (!objectiveEl) return;
+  if (objectiveProgress.index >= OBJECTIVES.length) {
+    objectiveEl.innerHTML = '<div class="objective-title objective-complete">Objectives Complete</div><div class="objective-progress">You have the basics: harvest, craft, and light your build.</div>';
+    renderObjectiveHistory();
+    return;
+  }
+  const obj = OBJECTIVES[objectiveProgress.index];
+  const state = getObjectiveState(obj);
+  const current = Math.min(state.current, state.target);
+  objectiveEl.textContent = '';
+  const title = document.createElement('div');
+  title.className = 'objective-title';
+  title.textContent = `Objective ${objectiveProgress.index + 1}/${OBJECTIVES.length}: ${obj.title}`;
+  const detail = document.createElement('div');
+  detail.className = 'objective-progress';
+  detail.textContent = `${obj.detail} (${current}/${state.target})`;
+  objectiveEl.append(title, detail);
+  renderObjectiveHistory();
+}
+
+function renderObjectiveHistory(){
+  if (!objectiveHistoryEl) return;
+  objectiveHistoryEl.textContent = '';
+  const completed = objectiveProgress.completed || [];
+  if (!completed.length){
+    const empty = document.createElement('div');
+    empty.className = 'done';
+    empty.textContent = 'No objectives completed yet';
+    objectiveHistoryEl.appendChild(empty);
+    return;
+  }
+  for (const id of completed){
+    const obj = OBJECTIVES.find((candidate)=> candidate.id === id);
+    if (!obj) continue;
+    const item = document.createElement('div');
+    item.className = 'done';
+    item.textContent = obj.title;
+    objectiveHistoryEl.appendChild(item);
+  }
+}
+
+function refreshInventoryUI(){
+  updateObjectiveProgress();
+  updateSelectedLabel();
+  renderHotbar();
+  renderInventoryPanel();
+}
+
 function updateSelectedLabel(){
   const opt = placeOptions[selectedIndex];
-  selectedEl.textContent = `Selected: ${opt.name}`;
+  const count = opt.item ? getItemCount(opt.item) : 0;
+  if (selectedEl) selectedEl.textContent = `Selected: ${opt.name} x${count}`;
   // Mobile: reflect in switch button label + outline color
   const btnSwitch = document.getElementById('btnSwitch');
   if (btnSwitch){
-    btnSwitch.textContent = opt.name;
+    btnSwitch.textContent = `${opt.name} ${count}`;
     let color = '#cccccc';
     if (opt.type === 'block') color = BLOCK_COLOR[opt.id] || color;
-    else if (opt.type === 'tree') color = BLOCK_COLOR[BLOCK.LEAF] || color;
+    else if (opt.item && ITEM_DEFS[opt.item]) color = ITEM_DEFS[opt.item].color || color;
     btnSwitch.style.borderColor = color;
   }
 }
-updateSelectedLabel();
+
+function renderHotbar(){
+  if (!hotbarEl) return;
+  hotbarEl.textContent = '';
+  for (let i=0; i<placeOptions.length; i++){
+    const opt = placeOptions[i];
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = `hotbar-slot${i === selectedIndex ? ' selected' : ''}`;
+    btn.title = `${opt.name} (${getItemCount(opt.item)})`;
+    btn.addEventListener('click', (e)=>{
+      e.preventDefault();
+      selectedIndex = i;
+      refreshInventoryUI();
+      savePlayer();
+    });
+    const swatch = document.createElement('span');
+    swatch.className = 'hotbar-swatch';
+    swatch.style.background = opt.type === 'block'
+      ? (BLOCK_COLOR[opt.id] || '#cccccc')
+      : ((ITEM_DEFS[opt.item] && ITEM_DEFS[opt.item].color) || '#cccccc');
+    const name = document.createElement('span');
+    name.textContent = opt.name;
+    const count = document.createElement('span');
+    count.className = 'hotbar-count';
+    count.textContent = String(getItemCount(opt.item));
+    btn.append(swatch, name, count);
+    hotbarEl.appendChild(btn);
+  }
+}
+
+function ingredientsText(ingredients){
+  return Object.keys(ingredients).map((itemId)=> `${itemName(itemId)} x${ingredients[itemId]}`).join(', ');
+}
+
+function outputsText(outputs){
+  return Object.keys(outputs).map((itemId)=> `${itemName(itemId)} x${outputs[itemId]}`).join(', ');
+}
+
+function craftRecipe(recipe){
+  if (!canFitOutputs(recipe.out)) {
+    showHarvestStatus(`No room for ${outputsText(recipe.out)}`);
+    refreshInventoryUI();
+    return false;
+  }
+  if (!consumeIngredients(recipe.in)) {
+    showHarvestStatus(`Need ${ingredientsText(recipe.in)}`);
+    refreshInventoryUI();
+    return false;
+  }
+  for (const itemId of Object.keys(recipe.out)){
+    setItemCount(itemId, getItemCount(itemId) + recipe.out[itemId]);
+  }
+  saveInventory();
+  refreshInventoryUI();
+  showHarvestStatus(`Crafted ${outputsText(recipe.out)}`);
+  return true;
+}
+
+function renderInventoryPanel(){
+  if (inventoryGridEl){
+    inventoryGridEl.textContent = '';
+    for (const itemId of Object.keys(ITEM_DEFS)){
+      const count = getItemCount(itemId);
+      if (count <= 0) continue;
+      const def = ITEM_DEFS[itemId];
+      const item = document.createElement('div');
+      item.className = 'inventory-item';
+      const swatch = document.createElement('div');
+      swatch.className = 'item-swatch';
+      swatch.style.background = def.color || '#cccccc';
+      const body = document.createElement('div');
+      const name = document.createElement('div');
+      name.className = 'name';
+      name.textContent = def.name;
+      const amount = document.createElement('div');
+      amount.className = 'count';
+      amount.textContent = `Count: ${count}`;
+      body.append(name, amount);
+      item.append(swatch, body);
+      inventoryGridEl.appendChild(item);
+    }
+    if (!inventoryGridEl.children.length){
+      const empty = document.createElement('div');
+      empty.className = 'inventory-item';
+      empty.textContent = 'No resources yet';
+      inventoryGridEl.appendChild(empty);
+    }
+  }
+  if (craftingGridEl){
+    craftingGridEl.textContent = '';
+    for (const recipe of CRAFT_RECIPES){
+      const canCraft = hasIngredients(recipe.in) && canFitOutputs(recipe.out);
+      const row = document.createElement('div');
+      row.className = `recipe${canCraft ? '' : ' disabled'}`;
+      const body = document.createElement('div');
+      const name = document.createElement('div');
+      name.className = 'name';
+      name.textContent = recipe.name;
+      const cost = document.createElement('div');
+      cost.className = 'cost';
+      cost.textContent = `${ingredientsText(recipe.in)} -> ${outputsText(recipe.out)}`;
+      body.append(name, cost);
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'btn';
+      btn.textContent = 'Craft';
+      btn.disabled = !canCraft;
+      btn.addEventListener('click', (e)=>{
+        e.preventDefault();
+        craftRecipe(recipe);
+      });
+      row.append(body, btn);
+      craftingGridEl.appendChild(row);
+    }
+  }
+}
+
+function renderStorageGrid(gridEl, items, buttonText, onClick){
+  if (!gridEl) return;
+  gridEl.textContent = '';
+  for (const itemId of Object.keys(ITEM_DEFS)){
+    const count = Math.max(0, items[itemId]|0);
+    if (count <= 0) continue;
+    const def = ITEM_DEFS[itemId];
+    const row = document.createElement('div');
+    row.className = 'inventory-item storage-row';
+    const left = document.createElement('div');
+    left.style.display = 'flex';
+    left.style.alignItems = 'center';
+    left.style.gap = '8px';
+    const swatch = document.createElement('div');
+    swatch.className = 'item-swatch';
+    swatch.style.background = def.color || '#cccccc';
+    const body = document.createElement('div');
+    const name = document.createElement('div');
+    name.className = 'name';
+    name.textContent = def.name;
+    const amount = document.createElement('div');
+    amount.className = 'count';
+    amount.textContent = `Count: ${count}`;
+    body.append(name, amount);
+    left.append(swatch, body);
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'btn';
+    btn.textContent = buttonText;
+    btn.addEventListener('click', (e)=>{
+      e.preventDefault();
+      onClick(itemId);
+    });
+    row.append(left, btn);
+    gridEl.appendChild(row);
+  }
+  if (!gridEl.children.length){
+    const empty = document.createElement('div');
+    empty.className = 'inventory-item';
+    empty.textContent = 'Empty';
+    gridEl.appendChild(empty);
+  }
+}
+
+function renderChestPanel(){
+  if (!openChestKey) return;
+  const items = getChestItems(openChestKey);
+  if (chestTitleEl) chestTitleEl.textContent = `Chest ${openChestKey}`;
+  renderStorageGrid(chestPlayerGridEl, inventory, 'Store 1', transferToChest);
+  renderStorageGrid(chestStorageGridEl, items, 'Take 1', transferFromChest);
+}
+
+function transferToChest(itemId){
+  if (!openChestKey || getItemCount(itemId) <= 0) return false;
+  if (chestItemCount(openChestKey, itemId) >= MAX_STACK) {
+    showHarvestStatus('Chest stack is full');
+    return false;
+  }
+  removeItem(itemId, 1, false);
+  setChestItemCount(openChestKey, itemId, chestItemCount(openChestKey, itemId) + 1);
+  saveInventory();
+  saveChests();
+  refreshInventoryUI();
+  renderChestPanel();
+  updateShelterProgress();
+  return true;
+}
+
+function transferFromChest(itemId){
+  if (!openChestKey || chestItemCount(openChestKey, itemId) <= 0) return false;
+  if (getItemCount(itemId) >= MAX_STACK) {
+    showHarvestStatus('Inventory stack is full');
+    return false;
+  }
+  setChestItemCount(openChestKey, itemId, chestItemCount(openChestKey, itemId) - 1);
+  addItem(itemId, 1, false);
+  saveInventory();
+  saveChests();
+  refreshInventoryUI();
+  renderChestPanel();
+  return true;
+}
+
+function isInventoryOpen(){
+  return !!(inventoryPanelEl && !inventoryPanelEl.classList.contains('hidden'));
+}
+
+function isChestOpen(){
+  return !!(chestPanelEl && !chestPanelEl.classList.contains('hidden'));
+}
+
+function toggleInventoryPanel(force){
+  if (!inventoryPanelEl) return;
+  const open = typeof force === 'boolean' ? force : inventoryPanelEl.classList.contains('hidden');
+  inventoryPanelEl.classList.toggle('hidden', !open);
+  if (open) {
+    keys.clear();
+    sprint = false;
+    toggleChestPanel(false);
+    try { if (document.pointerLockElement) document.exitPointerLock(); } catch {}
+    renderInventoryPanel();
+  }
+}
+
+function toggleChestPanel(force, key=null){
+  if (!chestPanelEl) return;
+  const open = typeof force === 'boolean' ? force : chestPanelEl.classList.contains('hidden');
+  if (open && key) openChestKey = key;
+  chestPanelEl.classList.toggle('hidden', !open);
+  if (open) {
+    keys.clear();
+    sprint = false;
+    toggleInventoryPanel(false);
+    try { if (document.pointerLockElement) document.exitPointerLock(); } catch {}
+    renderChestPanel();
+  } else {
+    openChestKey = null;
+  }
+}
+
+if (inventoryCloseEl) inventoryCloseEl.addEventListener('click', (e)=>{
+  e.preventDefault();
+  toggleInventoryPanel(false);
+});
+if (inventoryPanelEl) inventoryPanelEl.addEventListener('click', (e)=>{
+  if (e.target === inventoryPanelEl) toggleInventoryPanel(false);
+});
+if (chestCloseEl) chestCloseEl.addEventListener('click', (e)=>{
+  e.preventDefault();
+  toggleChestPanel(false);
+});
+if (chestPanelEl) chestPanelEl.addEventListener('click', (e)=>{
+  if (e.target === chestPanelEl) toggleChestPanel(false);
+});
+
+loadObjectiveProgress();
+loadChests();
+loadInventory();
+refreshInventoryUI();
 // Apply any loaded selection from storage now that variables exist
 if (typeof window !== 'undefined' && window.__loadedSelectedIndex != null){
   selectedIndex = ((window.__loadedSelectedIndex|0)%placeOptions.length + placeOptions.length)%placeOptions.length;
-  updateSelectedLabel();
+  refreshInventoryUI();
   try { delete window.__loadedSelectedIndex; } catch {}
 }
 
@@ -1924,6 +2849,8 @@ function initMobileUI(){
   const btnAdd = document.getElementById('btnAdd');
   const btnRemove = document.getElementById('btnRemove');
   const btnSwitch = document.getElementById('btnSwitch');
+  const btnUse = document.getElementById('btnUse');
+  const btnInventory = document.getElementById('btnInventory');
   const menuBtn = document.getElementById('menuBtn');
   const menuClose = document.getElementById('menuClose');
   const panel = document.getElementById('menuPanel');
@@ -1936,6 +2863,7 @@ function initMobileUI(){
   const mNextTr = document.getElementById('menuNextTrack');
   const mTrackLabel = document.getElementById('menuTrackLabel');
   const mFly = document.getElementById('menuFly');
+  const mInventory = document.getElementById('menuInventory');
   const mRespawn = document.getElementById('menuRespawn');
   const mSave = document.getElementById('menuSave');
   const mLoad = document.getElementById('menuLoad');
@@ -1961,10 +2889,12 @@ function initMobileUI(){
 
   if (btnAdd) btnAdd.addEventListener('click', (e)=>{ e.preventDefault(); placeSelectedBlockOnce(); });
   if (btnRemove) btnRemove.addEventListener('click', (e)=>{ e.preventDefault(); breakBlockOnce(); });
+  if (btnUse) btnUse.addEventListener('click', (e)=>{ e.preventDefault(); useTargetOnce(); });
   if (btnSwitch) btnSwitch.addEventListener('click', (e)=>{
     e.preventDefault();
-    selectedIndex = (selectedIndex+1)%placeOptions.length; updateSelectedLabel(); savePlayer();
+    selectedIndex = (selectedIndex+1)%placeOptions.length; refreshInventoryUI(); savePlayer();
   });
+  if (btnInventory) btnInventory.addEventListener('click', (e)=>{ e.preventDefault(); toggleInventoryPanel(true); });
 
   function updateMenuLabels(){
     const cloudNames = ['None','Wispy','Both','Puffy'];
@@ -1991,6 +2921,7 @@ function initMobileUI(){
   if (mPrevTr) mPrevTr.addEventListener('click', (e)=>{ e.preventDefault(); setTrack(currentTrackIndex-1); updateMenuLabels(); });
   if (mNextTr) mNextTr.addEventListener('click', (e)=>{ e.preventDefault(); setTrack(currentTrackIndex+1); updateMenuLabels(); });
   if (mFly) mFly.addEventListener('click', (e)=>{ e.preventDefault(); flyMode=!flyMode; if(!flyMode){ player.vel[1]=0; } saveSettings(); updateMenuLabels(); });
+  if (mInventory) mInventory.addEventListener('click', (e)=>{ e.preventDefault(); toggleInventoryPanel(true); closeMenu(); });
   if (mRespawn) mRespawn.addEventListener('click', (e)=>{ e.preventDefault(); respawn(); closeMenu(); });
   if (mSave) mSave.addEventListener('click', (e)=>{ e.preventDefault(); copyWorldCode(); });
   if (mLoad) mLoad.addEventListener('click', (e)=>{ e.preventDefault(); promptLoadWorldCode(); closeMenu(); });
@@ -2007,22 +2938,34 @@ function updateCloudsLabel(){
 window.addEventListener('keydown', (e)=>{
   if (e.code==='KeyQ' || e.code==='BracketLeft') {
     if (labEl && !labEl.classList.contains('hidden')) return;
-    selectedIndex = (selectedIndex-1+placeOptions.length)%placeOptions.length; updateSelectedLabel(); savePlayer();
+    if (isInventoryOpen() || isChestOpen()) return;
+    selectedIndex = (selectedIndex-1+placeOptions.length)%placeOptions.length; refreshInventoryUI(); savePlayer();
   }
   if (e.code==='KeyE' || e.code==='BracketRight') {
     if (labEl && !labEl.classList.contains('hidden')) return;
-    selectedIndex = (selectedIndex+1)%placeOptions.length; updateSelectedLabel(); savePlayer();
+    if (isInventoryOpen() || isChestOpen()) return;
+    selectedIndex = (selectedIndex+1)%placeOptions.length; refreshInventoryUI(); savePlayer();
   }
 });
 
 function doPlaceAt(x,y,z, hit){
   const opt = placeOptions[selectedIndex];
   if (opt.type === 'block'){
-    if (getBlock(x,y,z)===BLOCK.AIR){ setBlock(x,y,z, opt.id); sfxPlace(); }
-    return true;
-  }
-  if (opt.type === 'tree'){
-    placeTreeAt(x,y,z);
+    if (!inBounds(x,y,z)) return false;
+    if (getBlock(x,y,z)!==BLOCK.AIR) return false;
+    if (!removeItem(opt.item, 1, false)) {
+      showHarvestStatus(`No ${opt.name} in inventory`);
+      refreshInventoryUI();
+      return false;
+    }
+    setBlock(x,y,z, opt.id);
+    if (opt.id === BLOCK.CHEST) createChestAt(x,y,z);
+    saveInventory();
+    refreshInventoryUI();
+    if (opt.id === BLOCK.LAMP) markObjectiveFlag('placedLamp');
+    if (opt.id === BLOCK.CHEST) markObjectiveFlag('placedChest');
+    updateShelterProgress();
+    showHarvestStatus(`Placed ${opt.name}`);
     sfxPlace();
     return true;
   }
@@ -2059,11 +3002,12 @@ function placeSelectedBlockOnce(){
         if (isTopFace && placingAtFeetCell){
           const newY = ty + 1 + 1e-3; // stand on top of the placed block
           if (!aabbIntersectsBlock(px, newY, pz)){
-            doPlaceAt(tx,ty,tz, hit);
-            player.pos[1] = newY;
-            player.vel[1] = 0;
-            player.onGround = true;
-            savePlayer();
+            if (doPlaceAt(tx,ty,tz, hit)){
+              player.pos[1] = newY;
+              player.vel[1] = 0;
+              player.onGround = true;
+              savePlayer();
+            }
           }
         }
       }
@@ -2081,15 +3025,107 @@ function breakBlockOnce(){
   ];
   const hit = raycast(camPos, lookDir, 6.0);
   if (hit){
-    setBlock(hit.x, hit.y, hit.z, BLOCK.AIR);
-    sfxBreak();
+    harvestBlockAt(hit.x, hit.y, hit.z);
   }
+}
+
+function useTargetOnce(){
+  const yaw = player.yaw;
+  const camPos = [player.pos[0], player.pos[1] + EYE_HEIGHT, player.pos[2]];
+  const lookDir = [
+    -Math.sin(yaw)*Math.cos(player.pitch),
+    Math.sin(player.pitch),
+    -Math.cos(yaw)*Math.cos(player.pitch)
+  ];
+  const hit = raycast(camPos, lookDir, 6.0);
+  if (!hit) {
+    showHarvestStatus('Nothing to use');
+    return false;
+  }
+  if (getBlock(hit.x, hit.y, hit.z) === BLOCK.CHEST){
+    openChestKey = createChestAt(hit.x, hit.y, hit.z);
+    toggleChestPanel(true, openChestKey);
+    return true;
+  }
+  showHarvestStatus('Use targets chests');
+  return false;
+}
+
+function showHarvestStatus(text, timeout=1400){
+  if (!harvestStatusEl) return;
+  harvestStatusEl.textContent = text;
+  harvestStatusEl.classList.remove('hidden');
+  if (harvestStatusTimer) clearTimeout(harvestStatusTimer);
+  harvestStatusTimer = setTimeout(()=>{
+    harvestStatusEl.classList.add('hidden');
+  }, timeout);
+}
+
+function selectedToolTier(){
+  const opt = placeOptions[selectedIndex];
+  if (!opt || opt.type !== 'tool' || getItemCount(opt.item) <= 0) return 0;
+  const def = ITEM_DEFS[opt.item];
+  return (def && def.toolTier) || 0;
+}
+
+function neededToolName(tier){
+  if (tier >= 2) return 'Stone Pickaxe';
+  if (tier >= 1) return 'Wooden Pickaxe';
+  return 'Hand';
+}
+
+function harvestPowerForBlock(blockId, tier){
+  if (blockId === BLOCK.STONE && tier >= 1) return 2;
+  if ((blockId === BLOCK.ROCK || blockId === BLOCK.ORE) && tier >= 2) return 2;
+  return 1;
+}
+
+function harvestBlockAt(x,y,z){
+  const blockId = getBlock(x,y,z);
+  if (blockId === BLOCK.AIR) return false;
+  if (blockId === BLOCK.CHEST && !chestIsEmpty(chestKey(x,y,z))){
+    showHarvestStatus('Empty chest before breaking', 1800);
+    return false;
+  }
+  const rule = HARVEST_RULES[blockId] || { item: blockItemId(blockId), amount: 1, hardness: 1, toolTier: 0 };
+  const tier = selectedToolTier();
+  if (tier < (rule.toolTier || 0)){
+    const name = itemName(rule.item);
+    showHarvestStatus(`${name} needs ${neededToolName(rule.toolTier)}`, 1800);
+    return false;
+  }
+  if (!canAddItem(rule.item, rule.amount || 1)){
+    showHarvestStatus(`${itemName(rule.item)} stack is full`, 1800);
+    return false;
+  }
+  const key = `${x},${y},${z},${blockId}`;
+  if (!harvestTarget || harvestTarget.key !== key){
+    harvestTarget = { key, progress: 0 };
+  }
+  const hardness = Math.max(1, rule.hardness|0);
+  harvestTarget.progress += harvestPowerForBlock(blockId, tier);
+  const def = ITEM_DEFS[rule.item];
+  const name = def ? def.name : 'Block';
+  if (harvestTarget.progress >= hardness){
+    setBlock(x, y, z, BLOCK.AIR);
+    if (blockId === BLOCK.CHEST) deleteChestAt(x,y,z);
+    if (!addItem(rule.item, rule.amount || 1, true)) return false;
+    harvestTarget = null;
+    updateShelterProgress();
+    showHarvestStatus(`Harvested ${name} x${rule.amount || 1}`);
+    sfxBreak();
+    return true;
+  }
+  showHarvestStatus(`${name}: ${Math.min(hardness, harvestTarget.progress)} / ${hardness}`, 2200);
+  sfxStep();
+  return false;
 }
 
 // Bind B to place where we're pointing (with standing-on-block allowance)
 window.addEventListener('keydown', (e)=>{
   if (e.code==='KeyB') {
     if (labEl && !labEl.classList.contains('hidden')) return;
+    if (isInventoryOpen() || isChestOpen()) return;
     e.preventDefault();
     placeSelectedBlockOnce();
   }
@@ -2100,12 +3136,15 @@ window.addEventListener('keydown', (e)=>{
   if (e.code==='KeyC') {
     e.preventDefault();
     if (labEl && !labEl.classList.contains('hidden')) return;
+    if (isInventoryOpen() || isChestOpen()) return;
     breakBlockOnce();
   }
 });
 
 function canPlaceAtFromHit(hit){
   if (!hit) return null;
+  const opt = placeOptions[selectedIndex];
+  if (!opt || opt.type !== 'block' || getItemCount(opt.item) <= 0) return null;
   const tx = hit.x + hit.face[0];
   const ty = hit.y + hit.face[1];
   const tz = hit.z + hit.face[2];
@@ -2180,7 +3219,19 @@ function placeBlockUnderPlayer(){
   if (!aabbIntersectsBlock(px, newY, pz)){
     const opt = placeOptions[selectedIndex];
     if (opt.type !== 'block') return false;
+    if (!removeItem(opt.item, 1, false)) {
+      showHarvestStatus(`No ${opt.name} in inventory`);
+      refreshInventoryUI();
+      return false;
+    }
     setBlock(bx, ty, bz, opt.id);
+    if (opt.id === BLOCK.CHEST) createChestAt(bx,ty,bz);
+    saveInventory();
+    refreshInventoryUI();
+    if (opt.id === BLOCK.LAMP) markObjectiveFlag('placedLamp');
+    if (opt.id === BLOCK.CHEST) markObjectiveFlag('placedChest');
+    updateShelterProgress();
+    showHarvestStatus(`Placed ${opt.name}`);
     // Snap player on top
     player.pos[1] = newY;
     player.vel[1] = 0;
